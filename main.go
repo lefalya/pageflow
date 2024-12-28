@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lefalya/commonredis/interfaces"
 	"github.com/redis/go-redis/v9"
 	"time"
 )
@@ -23,22 +24,16 @@ var (
 	ERROR_MARSHAL_JSON = errors.New("(commoncrud) error marshal json!")
 )
 
-type Item interface {
-	SetUUID()
-	GetUUID() string
-	SetRandId()
-	GetRandId() string
-	SetCreatedAt(time time.Time)
-	GetCreatedAt() time.Time
-	SetUpdatedAt(time time.Time)
-	GetUpdatedAt() time.Time
-	SetCreatedAtString(timeString string)
-	GetCreatedAtString() string
-	SetUpdatedAtString(timeString string)
-	GetUpdatedAtString() string
+type Item struct {
+	UUID            string    `bson:"uuid"`
+	RandId          string    `bson:"randid"`
+	CreatedAt       time.Time `json:"-" bson:"-"`
+	UpdatedAt       time.Time `json:"-" bson:"-"`
+	CreatedAtString string    `bson:"createdat"`
+	UpdatedAtString string    `bson:"updatedat"`
 }
 
-type CommonRedis[T Item] struct {
+type CommonRedis[T interfaces.Item] struct {
 	client             redis.UniversalClient
 	itemKeyFormat      string
 	sortedSetKeyFormat string
@@ -51,7 +46,7 @@ type Error struct {
 	Message string
 }
 
-func Init[T Item](
+func Init[T interfaces.Item](
 	client redis.UniversalClient,
 	itemKeyFormat string,
 	sortedSetKeyFormat string,
