@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/lefalya/commonredis/interfaces"
 	"github.com/redis/go-redis/v9"
+	"math/rand"
 	"time"
 )
 
@@ -15,6 +17,7 @@ const (
 	DAY                = 24 * time.Hour
 	INDIVIDUAL_KEY_TTL = DAY * 7
 	SORTED_SET_TTL     = DAY * 2
+	RANDID_LENGTH      = 16
 )
 
 var (
@@ -24,6 +27,21 @@ var (
 	ERROR_MARSHAL_JSON = errors.New("(commoncrud) error marshal json!")
 )
 
+func RandId() string {
+	// Define the characters that can be used in the random string
+	characters := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+	// Initialize an empty string to store the result
+	result := make([]byte, RANDID_LENGTH)
+
+	// Generate random characters for the string
+	for i := 0; i < RANDID_LENGTH; i++ {
+		result[i] = characters[rand.Intn(len(characters))]
+	}
+
+	return string(result)
+}
+
 type Item struct {
 	UUID            string    `bson:"uuid"`
 	RandId          string    `bson:"randid"`
@@ -31,6 +49,54 @@ type Item struct {
 	UpdatedAt       time.Time `json:"-" bson:"-"`
 	CreatedAtString string    `bson:"createdat"`
 	UpdatedAtString string    `bson:"updatedat"`
+}
+
+func (i *Item) SetUUID() {
+	i.UUID = uuid.New().String()
+}
+
+func (i *Item) GetUUID() string {
+	return i.UUID
+}
+
+func (i *Item) SetRandId() {
+	i.RandId = RandId()
+}
+
+func (i *Item) GetRandId() string {
+	return i.RandId
+}
+
+func (i *Item) SetCreatedAt(time time.Time) {
+	i.CreatedAt = time
+}
+
+func (i *Item) SetUpdatedAt(time time.Time) {
+	i.UpdatedAt = time
+}
+
+func (i *Item) GetCreatedAt() time.Time {
+	return i.CreatedAt
+}
+
+func (i *Item) GetUpdatedAt() time.Time {
+	return i.UpdatedAt
+}
+
+func (i *Item) SetCreatedAtString(timeString string) {
+	i.CreatedAtString = timeString
+}
+
+func (i *Item) SetUpdatedAtString(timeString string) {
+	i.UpdatedAtString = timeString
+}
+
+func (i *Item) GetCreatedAtString() string {
+	return i.CreatedAtString
+}
+
+func (i *Item) GetUpdatedAtString() string {
+	return i.UpdatedAtString
 }
 
 type CommonRedis[T interfaces.Item] struct {
