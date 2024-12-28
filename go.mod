@@ -1,4 +1,4 @@
-module commonredis
+module github.com/lefalya/commonredis
 
 go 1.22
 
