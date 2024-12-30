@@ -299,7 +299,7 @@ func (cr *CommonRedis[T]) DelSettled(param []string) *Error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) SetSortedSet(param []string, item T) *Error {
+func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
 	cr.DelSettled(param)
 	key := fmt.Sprintf(cr.sortedSetKeyFormat, param)
 
