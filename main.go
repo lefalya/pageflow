@@ -301,7 +301,12 @@ func (cr *CommonRedis[T]) DelSettled(param []string) *Error {
 
 func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
 	cr.DelSettled(param)
-	key := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	var key string
+	if param == nil {
+		key = cr.sortedSetKeyFormat
+	} else {
+		key = fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	}
 
 	sortedSetMember := redis.Z{
 		Score:  float64(item.GetCreatedAt().UnixMilli()),
