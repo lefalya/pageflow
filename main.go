@@ -9,6 +9,7 @@ import (
 	"github.com/lefalya/commonredis/interfaces"
 	"github.com/redis/go-redis/v9"
 	"math/rand"
+	"reflect"
 	"time"
 )
 
@@ -97,6 +98,29 @@ func (i *Item) GetCreatedAtString() string {
 
 func (i *Item) GetUpdatedAtString() string {
 	return i.UpdatedAtString
+}
+
+func InitItem[T interfaces.Item](item T) {
+	currentTime := time.Now().In(time.UTC)
+	value := reflect.ValueOf(item).Elem()
+
+	// Iterate through the fields of the struct
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+
+		// Check if the field is a pointer and is nil
+		if field.Kind() == reflect.Ptr && field.IsNil() {
+			// Allocate a new value for the pointer and set it
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+	}
+
+	item.SetUUID()
+	item.SetRandId()
+	item.SetCreatedAt(currentTime)
+	item.SetUpdatedAt(currentTime)
+	item.SetCreatedAtString(currentTime.Format(FORMATTED_TIME))
+	item.SetUpdatedAtString(currentTime.Format(FORMATTED_TIME))
 }
 
 type CommonRedis[T interfaces.Item] struct {
