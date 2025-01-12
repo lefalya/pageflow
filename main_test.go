@@ -3,6 +3,7 @@ package commonredis
 import (
 	"fmt"
 	"github.com/go-redis/redismock/v9"
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
@@ -26,6 +27,14 @@ func TestKeySetSortedSet(t *testing.T) {
 
 	redis, _ := redismock.NewClientMock()
 
-	commonRedis := Init[Entity](redis, "entity:", "entity")
+	commonRedis := Init[Entity](redis, "entity:%s", "entity")
 	commonRedis.SetSortedSetCreatedAt(nil, entity)
+}
+
+func TestJoinParam(t *testing.T) {
+	formatKey := "id:%s:name:%s:contanct:%s"
+	param := []string{"jd3ruj39f", "nino", "yustika"}
+
+	joinResult := joinParam(formatKey, param)
+	assert.NotNil(t, joinResult)
 }

@@ -43,6 +43,15 @@ func RandId() string {
 	return string(result)
 }
 
+func joinParam(keyFormat string, param []string) string {
+	interfaces := make([]interface{}, len(param))
+	for i, v := range param {
+		interfaces[i] = v
+	}
+	sortedSetKey := fmt.Sprintf(keyFormat, interfaces...)
+	return sortedSetKey
+}
+
 type Item struct {
 	UUID            string    `bson:"uuid"`
 	RandId          string    `bson:"randid"`
@@ -244,7 +253,7 @@ func (cr *CommonRedis[T]) Del(item T) *Error {
 }
 
 func (cr *CommonRedis[T]) GetSettled(param []string) (bool, *Error) {
-	sortedSetKey := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
 	getSettledStatus := cr.client.Get(context.TODO(), settledKey)
@@ -263,7 +272,7 @@ func (cr *CommonRedis[T]) GetSettled(param []string) (bool, *Error) {
 }
 
 func (cr *CommonRedis[T]) SetSettled(param []string) *Error {
-	sortedSetKey := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
 	setSettledKey := cr.client.Set(
@@ -284,7 +293,7 @@ func (cr *CommonRedis[T]) SetSettled(param []string) *Error {
 }
 
 func (cr *CommonRedis[T]) DelSettled(param []string) *Error {
-	sortedSetKey := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
 	setSettledKey := cr.client.Del(context.TODO(), settledKey)
@@ -305,7 +314,7 @@ func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
 	if param == nil {
 		key = cr.sortedSetKeyFormat
 	} else {
-		key = fmt.Sprintf(cr.sortedSetKeyFormat, param)
+		key = joinParam(cr.sortedSetKeyFormat, param)
 	}
 
 	sortedSetMember := redis.Z{
@@ -340,7 +349,7 @@ func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
 }
 
 func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) *Error {
-	key := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeFromSortedSet := cr.client.ZRem(
 		context.TODO(),
@@ -358,7 +367,7 @@ func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) *Error {
 }
 
 func (cr *CommonRedis[T]) TotalItemOnSortedSet(param []string) int64 {
-	key := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	getTotalItemSortedSet := cr.client.ZCard(context.TODO(), key)
 	if getTotalItemSortedSet.Err() != nil {
@@ -369,7 +378,7 @@ func (cr *CommonRedis[T]) TotalItemOnSortedSet(param []string) int64 {
 }
 
 func (cr *CommonRedis[T]) DeleteSortedSet(param []string) *Error {
-	key := fmt.Sprintf(cr.sortedSetKeyFormat, param)
+	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeSortedSet := cr.client.Del(context.TODO(), key)
 	if removeSortedSet.Err() != nil {
