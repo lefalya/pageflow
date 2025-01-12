@@ -136,6 +136,7 @@ type CommonRedis[T interfaces.Item] struct {
 	client             redis.UniversalClient
 	itemKeyFormat      string
 	sortedSetKeyFormat string
+	itemPerPage        int64
 	settledKeyFormat   string
 }
 
@@ -308,7 +309,7 @@ func (cr *CommonRedis[T]) DelSettled(param []string) *Error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
+func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) *Error {
 	cr.DelSettled(param)
 	var key string
 	if param == nil {
@@ -318,7 +319,7 @@ func (cr *CommonRedis[T]) SetSortedSetCreatedAt(param []string, item T) *Error {
 	}
 
 	sortedSetMember := redis.Z{
-		Score:  float64(item.GetCreatedAt().UnixMilli()),
+		Score:  score,
 		Member: item.GetRandId(),
 	}
 
@@ -389,4 +390,57 @@ func (cr *CommonRedis[T]) DeleteSortedSet(param []string) *Error {
 	}
 
 	return nil
+}
+
+func (cr *CommonRedis[T]) FetchLinkedDescending(
+	param []string,
+	lastRandIds []string,
+) ([]T, string, *Error) {
+	var items []T
+	var validLastRandId string
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	start := int64(0)
+	stop := cr.itemPerPage
+
+	for i := len(lastRandIds) - 1; i >= 0; i-- {
+		item, err := cr.Get(lastRandIds[i])
+		if err != nil {
+			continue
+		}
+
+		rank := cr.client.ZRevRank(context.TODO(), sortedSetKey, item.GetRandId())
+		if rank.Err() == nil {
+			validLastRandId = item.GetRandId()
+			start = rank.Val() + 1
+			stop = start + cr.itemPerPage - 1
+			break
+		}
+	}
+
+	totalItem := cr.TotalItemOnSortedSet(param)
+	if totalItem == 0 {
+		return items, validLastRandId, nil
+	}
+
+	listRandIds := cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
+	if listRandIds.Err() != nil {
+		return nil, "", &Error{
+			Err:     REDIS_FATAL_ERROR,
+			Details: listRandIds.Err().Error(),
+			Message: "FetchLinked operation failed",
+		}
+	}
+
+	cr.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
+
+	for i := 0; i < len(listRandIds.Val()); i++ {
+		item, err := cr.Get(listRandIds.Val()[i])
+		if err != nil {
+			continue
+		}
+
+		items = append(items, item)
+	}
+
+	return items, validLastRandId, nil
 }
