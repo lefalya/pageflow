@@ -159,7 +159,7 @@ func (cr *CommonRedis[T]) Get(randId string) (T, error) {
 	result := cr.client.Get(context.TODO(), key)
 	if result.Err() != nil {
 		if result.Err() == redis.Nil {
-			return nilItem, nil
+			return nilItem, redis.Nil
 		}
 		return nilItem, result.Err()
 	}
