@@ -19,6 +19,9 @@ const (
 	INDIVIDUAL_KEY_TTL = DAY * 7
 	SORTED_SET_TTL     = DAY * 2
 	RANDID_LENGTH      = 16
+	firstPage          = "FIRST_PAGE"
+	middlePage         = "MIDDLE_PAGE"
+	lastPage           = "LAST_PAGE"
 )
 
 var (
@@ -232,7 +235,11 @@ func (cr *CommonRedis[T]) GetSettled(param []string) (bool, error) {
 
 	getSettledStatus := cr.client.Get(context.TODO(), settledKey)
 	if getSettledStatus.Err() != nil {
-		return false, getSettledStatus.Err()
+		if getSettledStatus.Err() == redis.Nil {
+			return false, nil
+		} else {
+			return false, getSettledStatus.Err()
+		}
 	}
 
 	if getSettledStatus.Val() == "1" {
@@ -347,9 +354,11 @@ func (cr *CommonRedis[T]) DeleteSortedSet(param []string) error {
 func (cr *CommonRedis[T]) FetchLinkedDescending(
 	param []string,
 	lastRandIds []string,
-) ([]T, string, error) {
+) ([]T, string, string, error) {
 	var items []T
 	var validLastRandId string
+	var position string
+
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	start := int64(0)
 	stop := cr.itemPerPage
@@ -369,14 +378,9 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 		}
 	}
 
-	totalItem := cr.TotalItemOnSortedSet(param)
-	if totalItem == 0 {
-		return items, validLastRandId, nil
-	}
-
 	listRandIds := cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
 	if listRandIds.Err() != nil {
-		return nil, "", listRandIds.Err()
+		return nil, validLastRandId, position, listRandIds.Err()
 	}
 
 	cr.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
@@ -390,5 +394,18 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 		items = append(items, item)
 	}
 
-	return items, validLastRandId, nil
+	isSettled, errorGetSettled := cr.GetSettled(param)
+	if errorGetSettled != nil {
+		return nil, validLastRandId, position, errorGetSettled
+	}
+
+	if start == 0 {
+		position = firstPage
+	} else if int64(len(listRandIds.Val())) < cr.itemPerPage && isSettled {
+		position = lastPage
+	} else {
+		position = middlePage
+	}
+
+	return items, validLastRandId, position, nil
 }
