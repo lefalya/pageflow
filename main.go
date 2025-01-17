@@ -140,12 +140,6 @@ type CommonRedis[T interfaces.Item] struct {
 	settledKeyFormat   string
 }
 
-type Error struct {
-	Err     error
-	Details string
-	Message string
-}
-
 func Init[T interfaces.Item](
 	client redis.UniversalClient,
 	itemKeyFormat string,
@@ -158,31 +152,22 @@ func Init[T interfaces.Item](
 	}
 }
 
-func (cr *CommonRedis[T]) Get(randId string) (T, *Error) {
+func (cr *CommonRedis[T]) Get(randId string) (T, error) {
 	var nilItem T
 	key := fmt.Sprintf(cr.itemKeyFormat, randId)
 
 	result := cr.client.Get(context.TODO(), key)
 	if result.Err() != nil {
 		if result.Err() == redis.Nil {
-			return nilItem, &Error{
-				Err:     KEY_NOT_FOUND,
-				Details: "key not found!",
-			}
+			return nilItem, nil
 		}
-		return nilItem, &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: result.Err().Error(),
-		}
+		return nilItem, result.Err()
 	}
 
 	var item T
 	errorUnmarshal := json.Unmarshal([]byte(result.Val()), &item)
 	if errorUnmarshal != nil {
-		return nilItem, &Error{
-			Err:     ERROR_PARSE_JSON,
-			Details: errorUnmarshal.Error(),
-		}
+		return nilItem, errorUnmarshal
 	}
 
 	parsedTimeCreatedAt, _ := time.Parse(FORMATTED_TIME, item.GetCreatedAtString())
@@ -193,16 +178,13 @@ func (cr *CommonRedis[T]) Get(randId string) (T, *Error) {
 
 	setExpire := cr.client.Expire(context.TODO(), key, INDIVIDUAL_KEY_TTL)
 	if setExpire.Err() != nil {
-		return nilItem, &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setExpire.Err().Error(),
-		}
+		return nilItem, setExpire.Err()
 	}
 
 	return item, nil
 }
 
-func (cr *CommonRedis[T]) Set(item T) *Error {
+func (cr *CommonRedis[T]) Set(item T) error {
 	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
 
 	createdAtAsString := item.GetCreatedAt().Format(FORMATTED_TIME)
@@ -213,10 +195,7 @@ func (cr *CommonRedis[T]) Set(item T) *Error {
 
 	itemInByte, errorMarshalJson := json.Marshal(item)
 	if errorMarshalJson != nil {
-		return &Error{
-			Err:     ERROR_MARSHAL_JSON,
-			Details: errorMarshalJson.Error(),
-		}
+		return errorMarshalJson
 	}
 
 	valueAsString := string(itemInByte)
@@ -227,16 +206,13 @@ func (cr *CommonRedis[T]) Set(item T) *Error {
 		INDIVIDUAL_KEY_TTL,
 	)
 	if setRedis.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setRedis.Err().Error(),
-		}
+		return setRedis.Err()
 	}
 
 	return nil
 }
 
-func (cr *CommonRedis[T]) Del(item T) *Error {
+func (cr *CommonRedis[T]) Del(item T) error {
 	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
 
 	deleteRedis := cr.client.Del(
@@ -244,25 +220,19 @@ func (cr *CommonRedis[T]) Del(item T) *Error {
 		key,
 	)
 	if deleteRedis.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: deleteRedis.Err().Error(),
-		}
+		return deleteRedis.Err()
 	}
 
 	return nil
 }
 
-func (cr *CommonRedis[T]) GetSettled(param []string) (bool, *Error) {
+func (cr *CommonRedis[T]) GetSettled(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
 	getSettledStatus := cr.client.Get(context.TODO(), settledKey)
 	if getSettledStatus.Err() != nil {
-		return false, &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: getSettledStatus.Err().Error(),
-		}
+		return false, getSettledStatus.Err()
 	}
 
 	if getSettledStatus.Val() == "1" {
@@ -272,7 +242,7 @@ func (cr *CommonRedis[T]) GetSettled(param []string) (bool, *Error) {
 	return false, nil
 }
 
-func (cr *CommonRedis[T]) SetSettled(param []string) *Error {
+func (cr *CommonRedis[T]) SetSettled(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
@@ -284,32 +254,26 @@ func (cr *CommonRedis[T]) SetSettled(param []string) *Error {
 	)
 
 	if setSettledKey.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setSettledKey.Err().Error(),
-		}
+		return setSettledKey.Err()
 	}
 
 	return nil
 }
 
-func (cr *CommonRedis[T]) DelSettled(param []string) *Error {
+func (cr *CommonRedis[T]) DelSettled(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
 
 	setSettledKey := cr.client.Del(context.TODO(), settledKey)
 
 	if setSettledKey.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setSettledKey.Err().Error(),
-		}
+		return setSettledKey.Err()
 	}
 
 	return nil
 }
 
-func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) *Error {
+func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) error {
 	cr.DelSettled(param)
 	var key string
 	if param == nil {
@@ -328,10 +292,7 @@ func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) *E
 		key,
 		sortedSetMember)
 	if setSortedSet.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setSortedSet.Err().Error(),
-		}
+		return setSortedSet.Err()
 	}
 
 	setExpire := cr.client.Expire(
@@ -340,16 +301,13 @@ func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) *E
 		SORTED_SET_TTL,
 	)
 	if !setExpire.Val() {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: setExpire.Err().Error(),
-		}
+		return setExpire.Err()
 	}
 
 	return nil
 }
 
-func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) *Error {
+func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) error {
 	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeFromSortedSet := cr.client.ZRem(
@@ -358,10 +316,7 @@ func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) *Error {
 		item.GetRandId(),
 	)
 	if removeFromSortedSet.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: removeFromSortedSet.Err().Error(),
-		}
+		return removeFromSortedSet.Err()
 	}
 
 	return nil
@@ -378,15 +333,12 @@ func (cr *CommonRedis[T]) TotalItemOnSortedSet(param []string) int64 {
 	return getTotalItemSortedSet.Val()
 }
 
-func (cr *CommonRedis[T]) DeleteSortedSet(param []string) *Error {
+func (cr *CommonRedis[T]) DeleteSortedSet(param []string) error {
 	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeSortedSet := cr.client.Del(context.TODO(), key)
 	if removeSortedSet.Err() != nil {
-		return &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: removeSortedSet.Err().Error(),
-		}
+		return removeSortedSet.Err()
 	}
 
 	return nil
@@ -395,7 +347,7 @@ func (cr *CommonRedis[T]) DeleteSortedSet(param []string) *Error {
 func (cr *CommonRedis[T]) FetchLinkedDescending(
 	param []string,
 	lastRandIds []string,
-) ([]T, string, *Error) {
+) ([]T, string, error) {
 	var items []T
 	var validLastRandId string
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
@@ -424,11 +376,7 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 
 	listRandIds := cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
 	if listRandIds.Err() != nil {
-		return nil, "", &Error{
-			Err:     REDIS_FATAL_ERROR,
-			Details: listRandIds.Err().Error(),
-			Message: "FetchLinked operation failed",
-		}
+		return nil, "", listRandIds.Err()
 	}
 
 	cr.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
