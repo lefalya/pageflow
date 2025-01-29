@@ -143,16 +143,16 @@ type CommonRedis[T interfaces.Item] struct {
 	settledKeyFormat   string
 }
 
-func Init[T interfaces.Item](
-	client redis.UniversalClient,
-	itemKeyFormat string,
-	sortedSetKeyFormat string,
-) *CommonRedis[T] {
-	return &CommonRedis[T]{
-		client:             client,
-		itemKeyFormat:      itemKeyFormat,
-		sortedSetKeyFormat: sortedSetKeyFormat,
-	}
+func (cr *CommonRedis[T]) SetItemKeyFormat(format string) {
+	cr.itemKeyFormat = format
+}
+
+func (cr *CommonRedis[T]) SetSortedSetKeyFormat(format string) {
+	cr.sortedSetKeyFormat = format
+}
+
+func (cr *CommonRedis[T]) SetItemPerPage(perPage int64) {
+	cr.itemPerPage = perPage
 }
 
 func (cr *CommonRedis[T]) Get(randId string) (T, error) {
@@ -408,4 +408,10 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 	}
 
 	return items, validLastRandId, position, nil
+}
+
+func Init[T interfaces.Item](client redis.UniversalClient) *CommonRedis[T] {
+	return &CommonRedis[T]{
+		client: client,
+	}
 }
