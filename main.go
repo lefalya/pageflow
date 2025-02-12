@@ -281,7 +281,6 @@ func (cr *CommonRedis[T]) DelSettled(param []string) error {
 }
 
 func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) error {
-	cr.DelSettled(param)
 	var key string
 	if param == nil {
 		key = cr.sortedSetKeyFormat
