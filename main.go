@@ -165,16 +165,28 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 		return errors.New("must set direction!")
 	}
 
+	isFirstPage, err := cr.GetFirstPage(sortedSetParam)
+	if err != nil {
+		return err
+	}
+
+	isLastPage, err := cr.GetLastPage(sortedSetParam)
+	if err != nil {
+		return err
+	}
+
 	if cr.direction == Descending {
 		if cr.TotalItemOnSortedSet(sortedSetParam) > 0 {
 			return cr.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+			if cr.TotalItemOnSortedSet(sortedSetParam) > cr.itemPerPage && isFirstPage {
+				cr.DelFirstPage(sortedSetParam)
+			}
 		}
 	} else if cr.direction == Ascending {
-		settled, err := cr.GetSettled(sortedSetParam)
-		if err != nil {
-			return err
+		if cr.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
+			return cr.DelFirstPage(sortedSetParam)
 		}
-		if settled {
+		if isFirstPage || isLastPage {
 			return cr.SetSortedSet(sortedSetParam, float64(item.GetUpdatedAt().UnixMilli()), item)
 		}
 	}
@@ -183,8 +195,7 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 }
 
 func (cr *CommonRedis[T]) RemoveItem(item T, sortedSetParam []string) error {
-
-	return nil
+	return cr.DeleteFromSortedSet(sortedSetParam, item)
 }
 
 func (cr *CommonRedis[T]) Get(randId string) (T, error) {
@@ -261,6 +272,101 @@ func (cr *CommonRedis[T]) Del(item T) error {
 	return nil
 }
 
+func (cr *CommonRedis[T]) GetFirstPage(param []string) (bool, error) {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	fistPageKey := sortedSetKey + ":firstpage"
+
+	getFirstPageKey := cr.client.Get(context.TODO(), fistPageKey)
+	if getFirstPageKey.Err() != nil {
+		if getFirstPageKey.Err() == redis.Nil {
+			return false, nil
+		} else {
+			return false, getFirstPageKey.Err()
+		}
+	}
+
+	if getFirstPageKey.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (cr *CommonRedis[T]) SetFirstPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	firstPageKey := sortedSetKey + ":firstpage"
+
+	setFirstPageKey := cr.client.Set(
+		context.TODO(),
+		firstPageKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setFirstPageKey.Err() != nil {
+		return setFirstPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *CommonRedis[T]) DelFirstPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	firstPageKey := sortedSetKey + ":settled"
+
+	setFirstPageKey := cr.client.Del(context.TODO(), firstPageKey)
+	if setFirstPageKey.Err() != nil {
+		return setFirstPageKey.Err()
+	}
+
+	return nil
+}
+
+func (cr *CommonRedis[T]) GetLastPage(param []string) (bool, error) {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":lastpage"
+
+	getLastPageKey := cr.client.Get(context.TODO(), lastPageKey)
+	if getLastPageKey.Err() != nil {
+		if getLastPageKey.Err() == redis.Nil {
+			return false, nil
+		} else {
+			return false, getLastPageKey.Err()
+		}
+	}
+
+	if getLastPageKey.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (cr *CommonRedis[T]) SetLastPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":lastpage"
+
+	setLastPageKey := cr.client.Set(
+		context.TODO(),
+		lastPageKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setLastPageKey.Err() != nil {
+		return setLastPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *CommonRedis[T]) DelLastPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":lastpage"
+
+	delLastPageKey := cr.client.Del(context.TODO(), lastPageKey)
+	if delLastPageKey.Err() != nil {
+		return delLastPageKey.Err()
+	}
+	return nil
+}
+
 func (cr *CommonRedis[T]) GetSettled(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	settledKey := sortedSetKey + ":settled"
@@ -279,37 +385,6 @@ func (cr *CommonRedis[T]) GetSettled(param []string) (bool, error) {
 	}
 
 	return false, nil
-}
-
-func (cr *CommonRedis[T]) SetSettled(param []string) error {
-	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
-	settledKey := sortedSetKey + ":settled"
-
-	setSettledKey := cr.client.Set(
-		context.TODO(),
-		settledKey,
-		1,
-		SORTED_SET_TTL,
-	)
-
-	if setSettledKey.Err() != nil {
-		return setSettledKey.Err()
-	}
-
-	return nil
-}
-
-func (cr *CommonRedis[T]) DelSettled(param []string) error {
-	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
-	settledKey := sortedSetKey + ":settled"
-
-	setSettledKey := cr.client.Del(context.TODO(), settledKey)
-
-	if setSettledKey.Err() != nil {
-		return setSettledKey.Err()
-	}
-
-	return nil
 }
 
 func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) error {
