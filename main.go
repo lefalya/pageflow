@@ -22,13 +22,8 @@ const (
 	firstPage          = "FIRST_PAGE"
 	middlePage         = "MIDDLE_PAGE"
 	lastPage           = "LAST_PAGE"
-)
-
-var (
-	KEY_NOT_FOUND      = errors.New("(commonredis) key not found!")
-	REDIS_FATAL_ERROR  = errors.New("(commonredis) Redis fatal error!")
-	ERROR_PARSE_JSON   = errors.New("(commonredis) Parse json fatal error!")
-	ERROR_MARSHAL_JSON = errors.New("(commoncrud) error marshal json!")
+	ascending          = "ascending"
+	descending         = "descending"
 )
 
 func RandId() string {
@@ -141,6 +136,7 @@ type CommonRedis[T interfaces.Item] struct {
 	sortedSetKeyFormat string
 	itemPerPage        int64
 	settledKeyFormat   string
+	direction          string
 }
 
 func (cr *CommonRedis[T]) SetItemKeyFormat(format string) {
@@ -153,6 +149,37 @@ func (cr *CommonRedis[T]) SetSortedSetKeyFormat(format string) {
 
 func (cr *CommonRedis[T]) SetItemPerPage(perPage int64) {
 	cr.itemPerPage = perPage
+}
+
+func (cr *CommonRedis[T]) SetDirection(direction string) {
+	if direction != ascending || direction != descending {
+		direction = descending
+	} else {
+		cr.direction = direction
+	}
+}
+
+func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
+	// safety net
+	if cr.direction == "" {
+		return errors.New("must set direction!")
+	}
+
+	if cr.direction == descending {
+		if cr.TotalItemOnSortedSet(sortedSetParam) > 0 {
+			return cr.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+		}
+	} else if cr.direction == ascending {
+		settled, err := cr.GetSettled(sortedSetParam)
+		if err != nil {
+			return err
+		}
+		if settled {
+			return cr.SetSortedSet(sortedSetParam, float64(item.GetUpdatedAt().UnixMilli()), item)
+		}
+	}
+
+	return nil
 }
 
 func (cr *CommonRedis[T]) Get(randId string) (T, error) {
@@ -350,13 +377,18 @@ func (cr *CommonRedis[T]) DeleteSortedSet(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) FetchLinkedDescending(
+func (cr *CommonRedis[T]) FetchLinked(
 	param []string,
 	lastRandIds []string,
 ) ([]T, string, string, error) {
 	var items []T
 	var validLastRandId string
 	var position string
+
+	// safety net
+	if cr.direction == "" {
+		return nil, validLastRandId, position, errors.New("must set direction!")
+	}
 
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	start := int64(0)
@@ -377,19 +409,25 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 		}
 	}
 
-	listRandIds := cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
-	if listRandIds.Err() != nil {
-		return nil, validLastRandId, position, listRandIds.Err()
+	var listRandIds []string
+	var result *redis.StringSliceCmd
+	if cr.direction == descending {
+		result = cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
+	} else {
+		result = cr.client.ZRange(context.TODO(), sortedSetKey, start, stop)
 	}
+	if result.Err() != nil {
+		return nil, validLastRandId, position, result.Err()
+	}
+	listRandIds = result.Val()
 
 	cr.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
 
-	for i := 0; i < len(listRandIds.Val()); i++ {
-		item, err := cr.Get(listRandIds.Val()[i])
+	for i := 0; i < len(listRandIds); i++ {
+		item, err := cr.Get(listRandIds[i])
 		if err != nil {
 			continue
 		}
-
 		items = append(items, item)
 	}
 
@@ -400,7 +438,7 @@ func (cr *CommonRedis[T]) FetchLinkedDescending(
 
 	if start == 0 {
 		position = firstPage
-	} else if int64(len(listRandIds.Val())) < cr.itemPerPage && isSettled {
+	} else if int64(len(listRandIds)) < cr.itemPerPage && isSettled {
 		position = lastPage
 	} else {
 		position = middlePage
