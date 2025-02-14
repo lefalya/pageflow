@@ -165,12 +165,12 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 		return errors.New("must set direction!")
 	}
 
-	isFirstPage, err := cr.GetFirstPage(sortedSetParam)
+	isFirstPage, err := cr.IsFirstPage(sortedSetParam)
 	if err != nil {
 		return err
 	}
 
-	isLastPage, err := cr.GetLastPage(sortedSetParam)
+	isLastPage, err := cr.IsLastPage(sortedSetParam)
 	if err != nil {
 		return err
 	}
@@ -272,7 +272,7 @@ func (cr *CommonRedis[T]) Del(item T) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) GetFirstPage(param []string) (bool, error) {
+func (cr *CommonRedis[T]) IsFirstPage(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	fistPageKey := sortedSetKey + ":firstpage"
 
@@ -320,7 +320,7 @@ func (cr *CommonRedis[T]) DelFirstPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) GetLastPage(param []string) (bool, error) {
+func (cr *CommonRedis[T]) IsLastPage(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":lastpage"
 
