@@ -367,26 +367,6 @@ func (cr *CommonRedis[T]) DelLastPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) GetSettled(param []string) (bool, error) {
-	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
-	settledKey := sortedSetKey + ":settled"
-
-	getSettledStatus := cr.client.Get(context.TODO(), settledKey)
-	if getSettledStatus.Err() != nil {
-		if getSettledStatus.Err() == redis.Nil {
-			return false, nil
-		} else {
-			return false, getSettledStatus.Err()
-		}
-	}
-
-	if getSettledStatus.Val() == "1" {
-		return true, nil
-	}
-
-	return false, nil
-}
-
 func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) error {
 	var key string
 	if param == nil {
@@ -511,14 +491,9 @@ func (cr *CommonRedis[T]) FetchLinked(
 		items = append(items, item)
 	}
 
-	isSettled, errorGetSettled := cr.GetSettled(param)
-	if errorGetSettled != nil {
-		return nil, validLastRandId, position, errorGetSettled
-	}
-
 	if start == 0 {
 		position = firstPage
-	} else if int64(len(listRandIds)) < cr.itemPerPage && isSettled {
+	} else if int64(len(listRandIds)) < cr.itemPerPage {
 		position = lastPage
 	} else {
 		position = middlePage
