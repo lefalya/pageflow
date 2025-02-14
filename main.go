@@ -22,8 +22,8 @@ const (
 	firstPage          = "FIRST_PAGE"
 	middlePage         = "MIDDLE_PAGE"
 	lastPage           = "LAST_PAGE"
-	ascending          = "ascending"
-	descending         = "descending"
+	Ascending          = "Ascending"
+	Descending         = "Descending"
 )
 
 func RandId() string {
@@ -152,8 +152,8 @@ func (cr *CommonRedis[T]) SetItemPerPage(perPage int64) {
 }
 
 func (cr *CommonRedis[T]) SetDirection(direction string) {
-	if direction != ascending || direction != descending {
-		direction = descending
+	if direction != Ascending || direction != Descending {
+		direction = Descending
 	} else {
 		cr.direction = direction
 	}
@@ -165,11 +165,11 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 		return errors.New("must set direction!")
 	}
 
-	if cr.direction == descending {
+	if cr.direction == Descending {
 		if cr.TotalItemOnSortedSet(sortedSetParam) > 0 {
 			return cr.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
 		}
-	} else if cr.direction == ascending {
+	} else if cr.direction == Ascending {
 		settled, err := cr.GetSettled(sortedSetParam)
 		if err != nil {
 			return err
@@ -411,7 +411,7 @@ func (cr *CommonRedis[T]) FetchLinked(
 
 	var listRandIds []string
 	var result *redis.StringSliceCmd
-	if cr.direction == descending {
+	if cr.direction == Descending {
 		result = cr.client.ZRevRange(context.TODO(), sortedSetKey, start, stop)
 	} else {
 		result = cr.client.ZRange(context.TODO(), sortedSetKey, start, stop)
