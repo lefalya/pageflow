@@ -152,7 +152,7 @@ func (cr *CommonRedis[T]) SetItemPerPage(perPage int64) {
 }
 
 func (cr *CommonRedis[T]) SetDirection(direction string) {
-	if direction != Ascending || direction != Descending {
+	if direction != Ascending && direction != Descending {
 		direction = Descending
 	} else {
 		cr.direction = direction
@@ -178,6 +178,11 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 			return cr.SetSortedSet(sortedSetParam, float64(item.GetUpdatedAt().UnixMilli()), item)
 		}
 	}
+
+	return nil
+}
+
+func (cr *CommonRedis[T]) RemoveItem(item T, sortedSetParam []string) error {
 
 	return nil
 }
