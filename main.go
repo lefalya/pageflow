@@ -130,7 +130,7 @@ func InitItem[T interfaces.Item](item T) {
 	item.SetUpdatedAtString(currentTime.Format(FORMATTED_TIME))
 }
 
-type CommonRedis[T interfaces.Item] struct {
+type Paginate[T interfaces.Item] struct {
 	client             redis.UniversalClient
 	itemKeyFormat      string
 	sortedSetKeyFormat string
@@ -139,19 +139,19 @@ type CommonRedis[T interfaces.Item] struct {
 	direction          string
 }
 
-func (cr *CommonRedis[T]) SetItemKeyFormat(format string) {
+func (cr *Paginate[T]) SetItemKeyFormat(format string) {
 	cr.itemKeyFormat = format
 }
 
-func (cr *CommonRedis[T]) SetSortedSetKeyFormat(format string) {
+func (cr *Paginate[T]) SetSortedSetKeyFormat(format string) {
 	cr.sortedSetKeyFormat = format
 }
 
-func (cr *CommonRedis[T]) SetItemPerPage(perPage int64) {
+func (cr *Paginate[T]) SetItemPerPage(perPage int64) {
 	cr.itemPerPage = perPage
 }
 
-func (cr *CommonRedis[T]) SetDirection(direction string) {
+func (cr *Paginate[T]) SetDirection(direction string) {
 	if direction != Ascending && direction != Descending {
 		direction = Descending
 	} else {
@@ -159,7 +159,7 @@ func (cr *CommonRedis[T]) SetDirection(direction string) {
 	}
 }
 
-func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
+func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string) error {
 	// safety net
 	if cr.direction == "" {
 		return errors.New("must set direction!")
@@ -194,11 +194,11 @@ func (cr *CommonRedis[T]) AddItem(item T, sortedSetParam []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) RemoveItem(item T, sortedSetParam []string) error {
+func (cr *Paginate[T]) RemoveItem(item T, sortedSetParam []string) error {
 	return cr.DeleteFromSortedSet(sortedSetParam, item)
 }
 
-func (cr *CommonRedis[T]) Get(randId string) (T, error) {
+func (cr *Paginate[T]) Get(randId string) (T, error) {
 	var nilItem T
 	key := fmt.Sprintf(cr.itemKeyFormat, randId)
 
@@ -230,7 +230,7 @@ func (cr *CommonRedis[T]) Get(randId string) (T, error) {
 	return item, nil
 }
 
-func (cr *CommonRedis[T]) Set(item T) error {
+func (cr *Paginate[T]) Set(item T) error {
 	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
 
 	createdAtAsString := item.GetCreatedAt().Format(FORMATTED_TIME)
@@ -258,7 +258,7 @@ func (cr *CommonRedis[T]) Set(item T) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) Del(item T) error {
+func (cr *Paginate[T]) Del(item T) error {
 	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
 
 	deleteRedis := cr.client.Del(
@@ -272,7 +272,7 @@ func (cr *CommonRedis[T]) Del(item T) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) IsFirstPage(param []string) (bool, error) {
+func (cr *Paginate[T]) IsFirstPage(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	fistPageKey := sortedSetKey + ":firstpage"
 
@@ -291,7 +291,7 @@ func (cr *CommonRedis[T]) IsFirstPage(param []string) (bool, error) {
 	return false, nil
 }
 
-func (cr *CommonRedis[T]) SetFirstPage(param []string) error {
+func (cr *Paginate[T]) SetFirstPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	firstPageKey := sortedSetKey + ":firstpage"
 
@@ -308,7 +308,7 @@ func (cr *CommonRedis[T]) SetFirstPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) DelFirstPage(param []string) error {
+func (cr *Paginate[T]) DelFirstPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	firstPageKey := sortedSetKey + ":settled"
 
@@ -320,7 +320,7 @@ func (cr *CommonRedis[T]) DelFirstPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) IsLastPage(param []string) (bool, error) {
+func (cr *Paginate[T]) IsLastPage(param []string) (bool, error) {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":lastpage"
 
@@ -339,7 +339,7 @@ func (cr *CommonRedis[T]) IsLastPage(param []string) (bool, error) {
 	return false, nil
 }
 
-func (cr *CommonRedis[T]) SetLastPage(param []string) error {
+func (cr *Paginate[T]) SetLastPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":lastpage"
 
@@ -356,7 +356,7 @@ func (cr *CommonRedis[T]) SetLastPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) DelLastPage(param []string) error {
+func (cr *Paginate[T]) DelLastPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":lastpage"
 
@@ -367,7 +367,7 @@ func (cr *CommonRedis[T]) DelLastPage(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) error {
+func (cr *Paginate[T]) SetSortedSet(param []string, score float64, item T) error {
 	var key string
 	if param == nil {
 		key = cr.sortedSetKeyFormat
@@ -400,7 +400,7 @@ func (cr *CommonRedis[T]) SetSortedSet(param []string, score float64, item T) er
 	return nil
 }
 
-func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) error {
+func (cr *Paginate[T]) DeleteFromSortedSet(param []string, item T) error {
 	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeFromSortedSet := cr.client.ZRem(
@@ -415,7 +415,7 @@ func (cr *CommonRedis[T]) DeleteFromSortedSet(param []string, item T) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) TotalItemOnSortedSet(param []string) int64 {
+func (cr *Paginate[T]) TotalItemOnSortedSet(param []string) int64 {
 	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	getTotalItemSortedSet := cr.client.ZCard(context.TODO(), key)
@@ -426,7 +426,7 @@ func (cr *CommonRedis[T]) TotalItemOnSortedSet(param []string) int64 {
 	return getTotalItemSortedSet.Val()
 }
 
-func (cr *CommonRedis[T]) DeleteSortedSet(param []string) error {
+func (cr *Paginate[T]) DeleteSortedSet(param []string) error {
 	key := joinParam(cr.sortedSetKeyFormat, param)
 
 	removeSortedSet := cr.client.Del(context.TODO(), key)
@@ -437,7 +437,7 @@ func (cr *CommonRedis[T]) DeleteSortedSet(param []string) error {
 	return nil
 }
 
-func (cr *CommonRedis[T]) FetchLinked(
+func (cr *Paginate[T]) FetchLinked(
 	param []string,
 	lastRandIds []string,
 ) ([]T, string, string, error) {
@@ -502,8 +502,55 @@ func (cr *CommonRedis[T]) FetchLinked(
 	return items, validLastRandId, position, nil
 }
 
-func Init[T interfaces.Item](client redis.UniversalClient) *CommonRedis[T] {
-	return &CommonRedis[T]{
+func NewPaginate[T interfaces.Item](client redis.UniversalClient) *Paginate[T] {
+	return &Paginate[T]{
 		client: client,
+	}
+}
+
+type EventQueue[T interfaces.Item] struct {
+	client     redis.UniversalClient
+	name       string
+	throughput int64 // number of events per minute
+	duration   time.Duration
+}
+
+func (eq *EventQueue[T]) Add(ctx context.Context, item T) error {
+	err := eq.client.LPush(ctx, eq.name, item.GetRandId())
+	if err != nil {
+		return err.Err()
+	}
+
+	return nil
+}
+
+func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorHandler func(error)) {
+	ticker := time.NewTicker(eq.duration)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		randid, err := eq.client.RPop(ctx, eq.name).Result()
+		if err == redis.Nil {
+			continue
+		} else if err != nil {
+			errorHandler(err)
+			continue
+		}
+
+		err = processor(randid)
+		if err != nil {
+			errorHandler(err)
+		}
+	}
+}
+
+func NewEventQueue[T interfaces.Item](redis *redis.UniversalClient, name string, throughput int64) *EventQueue[T] {
+	duration := time.Duration(60/throughput) * time.Second
+
+	return &EventQueue[T]{
+		client:     *redis,
+		name:       name,
+		throughput: throughput,
+		duration:   duration,
 	}
 }
