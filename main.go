@@ -177,10 +177,10 @@ func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string) error {
 
 	if cr.direction == Descending {
 		if cr.TotalItemOnSortedSet(sortedSetParam) > 0 {
-			return cr.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
 			if cr.TotalItemOnSortedSet(sortedSetParam) > cr.itemPerPage && isFirstPage {
 				cr.DelFirstPage(sortedSetParam)
 			}
+			return cr.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
 		}
 	} else if cr.direction == Ascending {
 		if cr.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
