@@ -631,7 +631,7 @@ func (eq *EventQueue[T]) Add(ctx context.Context, item T) error {
 	return nil
 }
 
-func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorHandler func(error)) {
+func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorHandler func(error) error) {
 	ticker := time.NewTicker(eq.duration)
 	defer ticker.Stop()
 
