@@ -376,7 +376,7 @@ func (cr *Paginate[T]) SetFirstPage(param []string) error {
 
 func (cr *Paginate[T]) DelFirstPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
-	firstPageKey := sortedSetKey + ":settled"
+	firstPageKey := sortedSetKey + ":firstpage"
 
 	setFirstPageKey := cr.client.Del(context.TODO(), firstPageKey)
 	if setFirstPageKey.Err() != nil {
@@ -459,7 +459,7 @@ func (cr *Paginate[T]) Fetch(
 
 	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
 	start := int64(0)
-	stop := cr.itemPerPage
+	stop := cr.itemPerPage - 1
 
 	for i := len(lastRandIds) - 1; i >= 0; i-- {
 		item, err := cr.baseClient.Get(lastRandIds[i])
@@ -496,6 +496,7 @@ func (cr *Paginate[T]) Fetch(
 			continue
 		}
 		items = append(items, item)
+		validLastRandId = listRandIds[i]
 	}
 
 	if start == 0 {
@@ -631,7 +632,7 @@ func (eq *EventQueue[T]) Add(ctx context.Context, item T) error {
 	return nil
 }
 
-func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorHandler func(error) error) {
+func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorLogger func(error, string)) {
 	ticker := time.NewTicker(eq.duration)
 	defer ticker.Stop()
 
@@ -640,14 +641,21 @@ func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) erro
 		if err == redis.Nil {
 			continue
 		} else if err != nil {
-			errorHandler(err)
+			errorLogger(err, "")
 			continue
 		}
 
-		err = processor(randid)
-		if err != nil {
-			errorHandler(err)
-		}
+		go func(ranID string) {
+			err = processor(randid)
+			if err != nil {
+				errMsg := errors.New("Invocation RandId: " + randid + " failed: " + err.Error())
+				errorLogger(errMsg, randid)
+				errPush := eq.client.LPush(ctx, eq.name, randid)
+				if errPush.Err() != nil {
+					errorLogger(errors.New("Failed to push back randId: "+randid+" error: "+errPush.Err().Error()), randid)
+				}
+			}
+		}(randid)
 	}
 }
 
