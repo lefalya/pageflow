@@ -312,6 +312,14 @@ func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error
 	}
 
 	if !seed {
+		isBlankPage, errGet := cr.IsBlankPage(sortedSetParam)
+		if errGet != nil {
+			return errGet
+		}
+		if isBlankPage {
+			cr.DelBlankPage(sortedSetParam)
+		}
+
 		if cr.direction == Descending {
 			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
 				if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
@@ -425,6 +433,53 @@ func (cr *Paginate[T]) SetLastPage(param []string) error {
 func (cr *Paginate[T]) DelLastPage(param []string) error {
 	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":lastpage"
+
+	delLastPageKey := cr.client.Del(context.TODO(), lastPageKey)
+	if delLastPageKey.Err() != nil {
+		return delLastPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *Paginate[T]) IsBlankPage(param []string) (bool, error) {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
+
+	getLastPageKey := cr.client.Get(context.TODO(), lastPageKey)
+	if getLastPageKey.Err() != nil {
+		if getLastPageKey.Err() == redis.Nil {
+			return false, nil
+		} else {
+			return false, getLastPageKey.Err()
+		}
+	}
+
+	if getLastPageKey.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (cr *Paginate[T]) SetBlankPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
+
+	setLastPageKey := cr.client.Set(
+		context.TODO(),
+		lastPageKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setLastPageKey.Err() != nil {
+		return setLastPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *Paginate[T]) DelBlankPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
 
 	delLastPageKey := cr.client.Del(context.TODO(), lastPageKey)
 	if delLastPageKey.Err() != nil {
