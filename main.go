@@ -51,8 +51,8 @@ func joinParam(keyFormat string, param []string) string {
 }
 
 type Item struct {
-	UUID            string    `bson:"uuid"`
-	RandId          string    `bson:"randid"`
+	UUID            string    `json:"uuid,omitempty" bson:"uuid"`
+	RandId          string    `json:"randid,omitempty" bson:"randid"`
 	CreatedAt       time.Time `json:"-" bson:"-"`
 	UpdatedAt       time.Time `json:"-" bson:"-"`
 	CreatedAtString string    `bson:"createdat"`
