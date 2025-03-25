@@ -1,0 +1,201 @@
+package mongo
+
+import (
+	"context"
+	"errors"
+	"github.com/lefalya/item"
+	"github.com/lefalya/pageflow"
+	"github.com/lefalya/pageflow/interfaces"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"time"
+)
+
+var (
+	NoDatabaseProvided           = errors.New("No database provided!")
+	DocumentOrReferencesNotFound = errors.New("Document or References not found!")
+)
+
+type MongoSeeder[T interfaces.MongoItem] struct {
+	coll             *mongo.Collection
+	baseClient       *pageflow.Base[T]
+	paginationClient *pageflow.Paginate[T]
+}
+
+func (m *MongoSeeder[T]) FindOne(key string, value string) (T, error) {
+	var mongoItem T
+	if m.coll == nil {
+		return mongoItem, NoDatabaseProvided
+	}
+	item.InitItem(mongoItem)
+
+	filter := bson.D{{key, value}}
+	err := m.coll.FindOne(context.TODO(), filter).Decode(&mongoItem)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return mongoItem, DocumentOrReferencesNotFound
+		}
+		return mongoItem, err
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, mongoItem.GetCreatedAtString())
+	if err != nil {
+		return mongoItem, err
+	}
+
+	updatedAt, err := time.Parse(time.RFC3339, mongoItem.GetUpdatedAtString())
+	if err != nil {
+		return mongoItem, err
+	}
+	mongoItem.SetCreatedAt(createdAt)
+	mongoItem.SetUpdatedAt(updatedAt)
+
+	return mongoItem, nil
+}
+
+func (m *MongoSeeder[T]) SeedOne(key string, value string) error {
+	item, err := m.FindOne(key, value)
+	if err != nil {
+		return err
+	}
+
+	err = m.baseClient.Set(item)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, query bson.D, paginateKey string, initItem func() T) error {
+	var cursor *mongo.Cursor
+	var reference T
+	var err error
+	var firstPage bool
+	var filter bson.D
+	var errorDecode error
+
+	findOptions := options.Find()
+	if m.paginationClient.GetDirection() == pageflow.Ascending {
+		findOptions.SetSort(bson.D{{"_id", 1}})
+	} else {
+		findOptions.SetSort(bson.D{{"_id", -1}})
+	}
+
+	if validLastRandId != "" {
+		reference, err = m.FindOne("randid", validLastRandId)
+		if err != nil {
+			return err
+		}
+	} else {
+		firstPage = true
+	}
+
+	if reference != nil {
+		var limit int64
+		if subtraction > 0 {
+			limit = int64(m.paginationClient.GetItemPerPage()) - subtraction
+		} else {
+			limit = int64(m.paginationClient.GetItemPerPage())
+		}
+
+		findOptions.SetLimit(limit)
+		filter = bson.D{
+			{"$and",
+				bson.A{
+					query,
+					bson.D{
+						{"_id", bson.D{{"$lt", reference.GetObjectID()}}},
+					},
+				},
+			},
+		}
+	} else {
+		filter = query
+		findOptions.SetLimit(m.paginationClient.GetItemPerPage())
+	}
+
+	cursor, err = m.coll.Find(context.TODO(), filter, findOptions)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(context.TODO())
+
+	var counterLoop int64
+	counterLoop = 0
+	for cursor.Next(context.TODO()) {
+		item := initItem()
+		errorDecode = cursor.Decode(&item)
+		if errorDecode != nil {
+			continue
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, item.GetCreatedAtString())
+		if err != nil {
+			return err
+		}
+
+		updatedAt, err := time.Parse(time.RFC3339, item.GetUpdatedAtString())
+		if err != nil {
+			return err
+		}
+		item.SetCreatedAt(createdAt)
+		item.SetUpdatedAt(updatedAt)
+
+		m.baseClient.Set(item)
+		m.paginationClient.AddItem(item, []string{paginateKey}, true)
+		counterLoop++
+	}
+
+	if firstPage && counterLoop == 0 {
+		m.paginationClient.SetBlankPage([]string{paginateKey})
+	} else if firstPage && counterLoop > 0 && counterLoop < m.paginationClient.GetItemPerPage() {
+		m.paginationClient.SetFirstPage([]string{paginateKey})
+	} else if validLastRandId != "" && counterLoop < m.paginationClient.GetItemPerPage() {
+		m.paginationClient.SetLastPage([]string{paginateKey})
+	}
+
+	return nil
+}
+
+func (m *MongoSeeder[T]) SeedAll(query bson.D, listKey string, initItem func() T) error {
+	cursor, err := m.coll.Find(context.TODO(), query)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(context.TODO())
+
+	for cursor.Next(context.TODO()) {
+		item := initItem()
+		errorDecode := cursor.Decode(&item)
+		if errorDecode != nil {
+			continue
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, item.GetCreatedAtString())
+		if err != nil {
+			return err
+		}
+
+		updatedAt, err := time.Parse(time.RFC3339, item.GetUpdatedAtString())
+		if err != nil {
+			return err
+		}
+		item.SetCreatedAt(createdAt)
+		item.SetUpdatedAt(updatedAt)
+
+		m.baseClient.Set(item)
+		m.paginationClient.AddItem(item, []string{listKey}, true)
+	}
+
+	return nil
+}
+
+func NewMongoSeeder[T interfaces.MongoItem](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *MongoSeeder[T] {
+	return &MongoSeeder[T]{
+		coll:             coll,
+		baseClient:       baseClient,
+		paginationClient: paginateClient,
+	}
+}

@@ -1,15 +1,15 @@
-package commonredis
+package pageflow
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/lefalya/commonredis/interfaces"
+	"github.com/lefalya/item"
+	"github.com/lefalya/pageflow/interfaces"
 	"github.com/redis/go-redis/v9"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"math/rand"
-	"reflect"
 	"time"
 )
 
@@ -50,87 +50,25 @@ func joinParam(keyFormat string, param []string) string {
 	return sortedSetKey
 }
 
-type Item struct {
-	UUID            string    `json:"uuid,omitempty" bson:"uuid"`
-	RandId          string    `json:"randid,omitempty" bson:"randid"`
-	CreatedAt       time.Time `json:"-" bson:"-"`
-	UpdatedAt       time.Time `json:"-" bson:"-"`
-	CreatedAtString string    `bson:"createdat"`
-	UpdatedAtString string    `bson:"updatedat"`
+type MongoItem struct {
+	item.Foundation
+	ObjectID primitive.ObjectID `json:"-" bson:"_id"` // MongoDB support
 }
 
-func (i *Item) SetUUID() {
-	i.UUID = uuid.New().String()
+func (mi *MongoItem) SetObjectID() {
+	mi.ObjectID = primitive.NewObjectID()
 }
 
-func (i *Item) GetUUID() string {
-	return i.UUID
+func (mi *MongoItem) GetObjectID() primitive.ObjectID {
+	return mi.ObjectID
 }
 
-func (i *Item) SetRandId() {
-	i.RandId = RandId()
+func InitMongoItem[T interfaces.MongoItem](mongoItem T) {
+	item.InitItem(mongoItem)
+	mongoItem.SetObjectID()
 }
 
-func (i *Item) GetRandId() string {
-	return i.RandId
-}
-
-func (i *Item) SetCreatedAt(time time.Time) {
-	i.CreatedAt = time
-}
-
-func (i *Item) SetUpdatedAt(time time.Time) {
-	i.UpdatedAt = time
-}
-
-func (i *Item) GetCreatedAt() time.Time {
-	return i.CreatedAt
-}
-
-func (i *Item) GetUpdatedAt() time.Time {
-	return i.UpdatedAt
-}
-
-func (i *Item) SetCreatedAtString(timeString string) {
-	i.CreatedAtString = timeString
-}
-
-func (i *Item) SetUpdatedAtString(timeString string) {
-	i.UpdatedAtString = timeString
-}
-
-func (i *Item) GetCreatedAtString() string {
-	return i.CreatedAtString
-}
-
-func (i *Item) GetUpdatedAtString() string {
-	return i.UpdatedAtString
-}
-
-func InitItem[T interfaces.Item](item T) {
-	currentTime := time.Now().In(time.UTC)
-	value := reflect.ValueOf(item).Elem()
-
-	// Iterate through the fields of the struct
-	for i := 0; i < value.NumField(); i++ {
-		field := value.Field(i)
-
-		// Check if the field is a pointer and is nil
-		if field.Kind() == reflect.Ptr && field.IsNil() {
-			// Allocate a new value for the pointer and set it
-			field.Set(reflect.New(field.Type().Elem()))
-		}
-	}
-
-	item.SetUUID()
-	item.SetRandId()
-	item.SetCreatedAt(currentTime)
-	item.SetUpdatedAt(currentTime)
-	item.SetCreatedAtString(currentTime.Format(FORMATTED_TIME))
-	item.SetUpdatedAtString(currentTime.Format(FORMATTED_TIME))
-}
-
-type Base[T interfaces.Item] struct {
+type Base[T item.Blueprint] struct {
 	client        redis.UniversalClient
 	itemKeyFormat string
 }
@@ -209,14 +147,14 @@ func (cr *Base[T]) Del(item T) error {
 	return nil
 }
 
-func NewBase[T interfaces.Item](client redis.UniversalClient, itemKeyFormat string) *Base[T] {
+func NewBase[T item.Blueprint](client redis.UniversalClient, itemKeyFormat string) *Base[T] {
 	return &Base[T]{
 		client:        client,
 		itemKeyFormat: itemKeyFormat,
 	}
 }
 
-type SortedSet[T interfaces.Item] struct {
+type SortedSet[T item.Blueprint] struct {
 	client             redis.UniversalClient
 	sortedSetKeyFormat string
 }
@@ -280,19 +218,27 @@ func (cr *SortedSet[T]) TotalItemOnSortedSet(param []string) int64 {
 	return getTotalItemSortedSet.Val()
 }
 
-func NewSortedSet[T interfaces.Item](client redis.UniversalClient, sortedSetKeyFormat string) *SortedSet[T] {
+func NewSortedSet[T item.Blueprint](client redis.UniversalClient, sortedSetKeyFormat string) *SortedSet[T] {
 	return &SortedSet[T]{
 		client:             client,
 		sortedSetKeyFormat: sortedSetKeyFormat,
 	}
 }
 
-type Paginate[T interfaces.Item] struct {
+type Paginate[T item.Blueprint] struct {
 	client          redis.UniversalClient
 	baseClient      *Base[T]
 	sortedSetClient *SortedSet[T]
 	itemPerPage     int64
 	direction       string
+}
+
+func (cr *Paginate[T]) GetItemPerPage() int64 {
+	return cr.itemPerPage
+}
+
+func (cr *Paginate[T]) GetDirection() string {
+	return cr.direction
 }
 
 func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error {
@@ -502,6 +448,8 @@ func (cr *Paginate[T]) DeleteSortedSet(param []string) error {
 func (cr *Paginate[T]) Fetch(
 	param []string,
 	lastRandIds []string,
+	secure bool,
+	processor func(item *T, secure bool),
 ) ([]T, string, string, error) {
 	var items []T
 	var validLastRandId string
@@ -550,6 +498,12 @@ func (cr *Paginate[T]) Fetch(
 		if err != nil {
 			continue
 		}
+		if !secure {
+			item.SecureUUID()
+		}
+		if processor != nil {
+			processor(&item, secure)
+		}
 		items = append(items, item)
 		validLastRandId = listRandIds[i]
 	}
@@ -565,8 +519,7 @@ func (cr *Paginate[T]) Fetch(
 	return items, validLastRandId, position, nil
 }
 
-func NewPaginate[T interfaces.Item](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string) *Paginate[T] {
-
+func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string) *Paginate[T] {
 	if direction != Ascending && direction != Descending {
 		direction = Descending
 	}
@@ -585,7 +538,7 @@ func NewPaginate[T interfaces.Item](client redis.UniversalClient, baseClient *Ba
 	}
 }
 
-type Sorted[T interfaces.Item] struct {
+type Sorted[T item.Blueprint] struct {
 	client          redis.UniversalClient
 	baseClient      *Base[T]
 	sortedSetClient *SortedSet[T]
@@ -657,7 +610,7 @@ func (srtd *Sorted[T]) Fetch(param []string) ([]T, error) {
 	return items, nil
 }
 
-func NewSorted[T interfaces.Item](client redis.UniversalClient, baseClient *Base[T], keyFormat string, direction string) *Sorted[T] {
+func NewSorted[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, direction string) *Sorted[T] {
 	sortedSetClient := &SortedSet[T]{
 		client:             client,
 		sortedSetKeyFormat: keyFormat,
@@ -668,59 +621,5 @@ func NewSorted[T interfaces.Item](client redis.UniversalClient, baseClient *Base
 		baseClient:      baseClient,
 		sortedSetClient: sortedSetClient,
 		direction:       direction,
-	}
-}
-
-type EventQueue[T interfaces.Item] struct {
-	client     redis.UniversalClient
-	name       string
-	throughput int64 // number of events per minute
-	duration   time.Duration
-}
-
-func (eq *EventQueue[T]) Add(ctx context.Context, item T) error {
-	err := eq.client.LPush(ctx, eq.name, item.GetRandId())
-	if err != nil {
-		return err.Err()
-	}
-
-	return nil
-}
-
-func (eq *EventQueue[T]) Worker(ctx context.Context, processor func(string) error, errorLogger func(error, string)) {
-	ticker := time.NewTicker(eq.duration)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		randid, err := eq.client.RPop(ctx, eq.name).Result()
-		if err == redis.Nil {
-			continue
-		} else if err != nil {
-			errorLogger(err, "")
-			continue
-		}
-
-		go func(ranID string) {
-			err = processor(randid)
-			if err != nil {
-				errMsg := errors.New("Invocation RandId: " + randid + " failed: " + err.Error())
-				errorLogger(errMsg, randid)
-				errPush := eq.client.LPush(ctx, eq.name, randid)
-				if errPush.Err() != nil {
-					errorLogger(errors.New("Failed to push back randId: "+randid+" error: "+errPush.Err().Error()), randid)
-				}
-			}
-		}(randid)
-	}
-}
-
-func NewEventQueue[T interfaces.Item](redis *redis.UniversalClient, name string, throughput int64) *EventQueue[T] {
-	duration := time.Duration(60/throughput) * time.Second
-
-	return &EventQueue[T]{
-		client:     *redis,
-		name:       name,
-		throughput: throughput,
-		duration:   duration,
 	}
 }

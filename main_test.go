@@ -1,4 +1,4 @@
-package commonredis
+package pageflow
 
 import (
 	"fmt"
