@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lefalya/item"
-	"github.com/lefalya/pageflow/interfaces"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"math/rand"
+	"reflect"
 	"time"
 )
 
@@ -50,9 +50,16 @@ func joinParam(keyFormat string, param []string) string {
 	return sortedSetKey
 }
 
+type MongoItemBlueprint interface {
+	item.Blueprint
+	SetObjectID()
+	GetObjectID() primitive.ObjectID
+	GetSelf() *MongoItem
+}
+
 type MongoItem struct {
-	item.Foundation
-	ObjectID primitive.ObjectID `json:"-" bson:"_id"` // MongoDB support
+	*item.Foundation `json:",inline" bson:",inline"`
+	ObjectID         primitive.ObjectID `json:"-" bson:"_id"` // MongoDB support
 }
 
 func (mi *MongoItem) SetObjectID() {
@@ -63,8 +70,25 @@ func (mi *MongoItem) GetObjectID() primitive.ObjectID {
 	return mi.ObjectID
 }
 
-func InitMongoItem[T interfaces.MongoItem](mongoItem T) {
-	item.InitItem(mongoItem)
+func (mi *MongoItem) GetSelf() *MongoItem {
+	return mi
+}
+
+func InitMongoItem[T MongoItemBlueprint](mongoItem T) {
+	value := reflect.ValueOf(mongoItem).Elem()
+
+	// Iterate through the fields of the struct
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+
+		// Check if the field is a pointer and is nil
+		if field.Kind() == reflect.Ptr && field.IsNil() {
+			// Allocate a new value for the pointer and set it
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+	}
+
+	item.InitItem(mongoItem.GetSelf())
 	mongoItem.SetObjectID()
 }
 

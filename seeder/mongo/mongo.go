@@ -5,7 +5,6 @@ import (
 	"errors"
 	"github.com/lefalya/item"
 	"github.com/lefalya/pageflow"
-	"github.com/lefalya/pageflow/interfaces"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -17,7 +16,7 @@ var (
 	DocumentOrReferencesNotFound = errors.New("Document or References not found!")
 )
 
-type MongoSeeder[T interfaces.MongoItem] struct {
+type MongoSeeder[T pageflow.MongoItemBlueprint] struct {
 	coll             *mongo.Collection
 	baseClient       *pageflow.Base[T]
 	paginationClient *pageflow.Paginate[T]
@@ -71,6 +70,7 @@ func (m *MongoSeeder[T]) SeedOne(key string, value string) error {
 func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, query bson.D, paginateKey string, initItem func() T) error {
 	var cursor *mongo.Cursor
 	var reference T
+	var withReference bool
 	var err error
 	var firstPage bool
 	var filter bson.D
@@ -88,11 +88,12 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 		if err != nil {
 			return err
 		}
+		withReference = true
 	} else {
 		firstPage = true
 	}
 
-	if reference != nil {
+	if withReference {
 		var limit int64
 		if subtraction > 0 {
 			limit = int64(m.paginationClient.GetItemPerPage()) - subtraction
@@ -192,7 +193,7 @@ func (m *MongoSeeder[T]) SeedAll(query bson.D, listKey string, initItem func() T
 	return nil
 }
 
-func NewMongoSeeder[T interfaces.MongoItem](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *MongoSeeder[T] {
+func NewMongoSeeder[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *MongoSeeder[T] {
 	return &MongoSeeder[T]{
 		coll:             coll,
 		baseClient:       baseClient,

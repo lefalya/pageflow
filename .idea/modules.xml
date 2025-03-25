@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/commonredis.iml" filepath="$PROJECT_DIR$/.idea/commonredis.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/pageflow.iml" filepath="$PROJECT_DIR$/.idea/pageflow.iml" />
     </modules>
   </component>
 </project>
