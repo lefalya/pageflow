@@ -543,6 +543,29 @@ func (cr *Paginate[T]) Fetch(
 	return items, validLastRandId, position, nil
 }
 
+func (cr *Paginate[T]) RequriesSeeding(param []string, totalItems int64) (bool, error) {
+	isBlankPage, err := cr.IsBlankPage(param)
+	if err != nil {
+		return false, err
+	}
+
+	isFirstPage, err := cr.IsFirstPage(param)
+	if err != nil {
+		return false, err
+	}
+
+	isLastPage, err := cr.IsLastPage(param)
+	if err != nil {
+		return false, err
+	}
+
+	if !isBlankPage && !isFirstPage && !isLastPage && totalItems < cr.itemPerPage {
+		return true, nil
+	} else {
+		return false, nil
+	}
+}
+
 func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string) *Paginate[T] {
 	if direction != Ascending && direction != Descending {
 		direction = Descending

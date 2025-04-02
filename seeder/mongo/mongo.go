@@ -3,7 +3,6 @@ package mongo
 import (
 	"context"
 	"errors"
-	"github.com/lefalya/item"
 	"github.com/lefalya/pageflow"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -22,12 +21,11 @@ type MongoSeeder[T pageflow.MongoItemBlueprint] struct {
 	paginationClient *pageflow.Paginate[T]
 }
 
-func (m *MongoSeeder[T]) FindOne(key string, value string) (T, error) {
-	var mongoItem T
+func (m *MongoSeeder[T]) FindOne(key string, value string, initItem func() T) (T, error) {
+	mongoItem := initItem()
 	if m.coll == nil {
 		return mongoItem, NoDatabaseProvided
 	}
-	item.InitItem(mongoItem)
 
 	filter := bson.D{{key, value}}
 	err := m.coll.FindOne(context.TODO(), filter).Decode(&mongoItem)
@@ -53,8 +51,8 @@ func (m *MongoSeeder[T]) FindOne(key string, value string) (T, error) {
 	return mongoItem, nil
 }
 
-func (m *MongoSeeder[T]) SeedOne(key string, value string) error {
-	item, err := m.FindOne(key, value)
+func (m *MongoSeeder[T]) SeedOne(key string, value string, initItem func() T) error {
+	item, err := m.FindOne(key, value, initItem)
 	if err != nil {
 		return err
 	}
@@ -84,7 +82,7 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	}
 
 	if validLastRandId != "" {
-		reference, err = m.FindOne("randid", validLastRandId)
+		reference, err = m.FindOne("randid", validLastRandId, initItem)
 		if err != nil {
 			return err
 		}
@@ -154,6 +152,8 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	} else if firstPage && counterLoop > 0 && counterLoop < m.paginationClient.GetItemPerPage() {
 		m.paginationClient.SetFirstPage([]string{paginateKey})
 	} else if validLastRandId != "" && counterLoop < m.paginationClient.GetItemPerPage() {
+		// ada peluang orang kalau input reference ngasal, bisa secara langsung memforce lastPage = truel, padahal belum tentu.
+		// perlu dicheck juga apakah terdapat item pada sorted set terkait. atau setidaknya reference harus valid sebelum bisa digunakan untuk ingestion.
 		m.paginationClient.SetLastPage([]string{paginateKey})
 	}
 
