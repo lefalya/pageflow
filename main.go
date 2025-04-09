@@ -265,7 +265,10 @@ func (cr *Paginate[T]) GetDirection() string {
 	return cr.direction
 }
 
-func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error {
+func (cr *Paginate[T]) SetItem(item T, sortedSetParam []string, seed bool) error {
+	if err := cr.baseClient.Set(item); err != nil {
+		return err
+	}
 	// safety net
 	if cr.direction == "" {
 		return errors.New("must set direction!")
@@ -302,11 +305,11 @@ func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error
 				return cr.DelFirstPage(sortedSetParam)
 			}
 			if isFirstPage || isLastPage {
-				return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetUpdatedAt().UnixMilli()), item)
+				return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
 			}
 		}
 	} else {
-		return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetUpdatedAt().UnixMilli()), item)
+		return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
 	}
 
 	return nil
@@ -494,7 +497,13 @@ func (cr *Paginate[T]) Fetch(
 			continue
 		}
 
-		rank := cr.client.ZRevRank(context.TODO(), sortedSetKey, item.GetRandId())
+		var rank *redis.IntCmd
+		if cr.direction == Descending {
+			rank = cr.client.ZRevRank(context.TODO(), sortedSetKey, item.GetRandId())
+		} else {
+			rank = cr.client.ZRank(context.TODO(), sortedSetKey, item.GetRandId())
+		}
+
 		if rank.Err() == nil {
 			validLastRandId = item.GetRandId()
 			start = rank.Val() + 1
@@ -600,7 +609,11 @@ func (srtd *Sorted[T]) SetDirection(direction string) {
 	}
 }
 
-func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string, seed bool) error {
+func (srtd *Sorted[T]) UpsertItem(item T, sortedSetParam []string, seed bool) error {
+	if err := srtd.baseClient.Set(item); err != nil {
+		return err
+	}
+
 	if !seed {
 		if srtd.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
 			return srtd.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
