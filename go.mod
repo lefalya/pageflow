@@ -3,7 +3,7 @@ module github.com/lefalya/pageflow
 go 1.22
 
 require (
-	github.com/lefalya/item v1.2.0
+	github.com/lefalya/item v1.3.0
 	github.com/redis/go-redis/v9 v9.7.0
 	go.mongodb.org/mongo-driver v1.17.3
 )

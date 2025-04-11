@@ -115,12 +115,6 @@ func (cr *Base[T]) Get(randId string) (T, error) {
 		return nilItem, errorUnmarshal
 	}
 
-	parsedTimeCreatedAt, _ := time.Parse(FORMATTED_TIME, item.GetCreatedAtString())
-	parsedTimeUpdatedAt, _ := time.Parse(FORMATTED_TIME, item.GetUpdatedAtString())
-
-	item.SetCreatedAt(parsedTimeCreatedAt)
-	item.SetUpdatedAt(parsedTimeUpdatedAt)
-
 	setExpire := cr.client.Expire(context.TODO(), key, INDIVIDUAL_KEY_TTL)
 	if setExpire.Err() != nil {
 		return nilItem, setExpire.Err()
@@ -131,12 +125,6 @@ func (cr *Base[T]) Get(randId string) (T, error) {
 
 func (cr *Base[T]) Set(item T) error {
 	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
-
-	createdAtAsString := item.GetCreatedAt().Format(FORMATTED_TIME)
-	updatedAtAsString := item.GetUpdatedAt().Format(FORMATTED_TIME)
-
-	item.SetCreatedAtString(createdAtAsString)
-	item.SetUpdatedAtString(updatedAtAsString)
 
 	itemInByte, errorMarshalJson := json.Marshal(item)
 	if errorMarshalJson != nil {

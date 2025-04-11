@@ -7,7 +7,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"time"
 )
 
 var (
@@ -35,18 +34,6 @@ func (m *MongoSeeder[T]) FindOne(key string, value string, initItem func() T) (T
 		}
 		return mongoItem, err
 	}
-
-	createdAt, err := time.Parse(time.RFC3339, mongoItem.GetCreatedAtString())
-	if err != nil {
-		return mongoItem, err
-	}
-
-	updatedAt, err := time.Parse(time.RFC3339, mongoItem.GetUpdatedAtString())
-	if err != nil {
-		return mongoItem, err
-	}
-	mongoItem.SetCreatedAt(createdAt)
-	mongoItem.SetUpdatedAt(updatedAt)
 
 	return mongoItem, nil
 }
@@ -140,18 +127,6 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, item.GetCreatedAtString())
-		if err != nil {
-			return err
-		}
-
-		updatedAt, err := time.Parse(time.RFC3339, item.GetUpdatedAtString())
-		if err != nil {
-			return err
-		}
-		item.SetCreatedAt(createdAt)
-		item.SetUpdatedAt(updatedAt)
-
 		m.baseClient.Set(item)
 		m.paginationClient.AddItem(item, []string{paginateKey}, true)
 		counterLoop++
@@ -183,18 +158,6 @@ func (m *MongoSeeder[T]) SeedAll(query bson.D, listKey string, initItem func() T
 		if errorDecode != nil {
 			continue
 		}
-
-		createdAt, err := time.Parse(time.RFC3339, item.GetCreatedAtString())
-		if err != nil {
-			return err
-		}
-
-		updatedAt, err := time.Parse(time.RFC3339, item.GetUpdatedAtString())
-		if err != nil {
-			return err
-		}
-		item.SetCreatedAt(createdAt)
-		item.SetUpdatedAt(updatedAt)
 
 		m.baseClient.Set(item)
 		m.paginationClient.AddItem(item, []string{listKey}, true)
