@@ -87,9 +87,16 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	if validLastRandId != "" {
 		reference, err = m.FindOne("randid", validLastRandId, initItem)
 		if err != nil {
-			return err
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				firstPage = true
+				withReference = false
+			} else {
+				return err
+			}
+		} else {
+			withReference = true
 		}
-		withReference = true
+
 	} else {
 		firstPage = true
 	}
@@ -146,7 +153,7 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 		item.SetUpdatedAt(updatedAt)
 
 		m.baseClient.Set(item)
-		m.paginationClient.SetItem(item, []string{paginateKey}, true)
+		m.paginationClient.AddItem(item, []string{paginateKey}, true)
 		counterLoop++
 	}
 
@@ -190,7 +197,7 @@ func (m *MongoSeeder[T]) SeedAll(query bson.D, listKey string, initItem func() T
 		item.SetUpdatedAt(updatedAt)
 
 		m.baseClient.Set(item)
-		m.paginationClient.SetItem(item, []string{listKey}, true)
+		m.paginationClient.AddItem(item, []string{listKey}, true)
 	}
 
 	return nil
