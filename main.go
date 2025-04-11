@@ -242,6 +242,17 @@ func (cr *SortedSet[T]) TotalItemOnSortedSet(param []string) int64 {
 	return getTotalItemSortedSet.Val()
 }
 
+func (cr *SortedSet[T]) DeleteSortedSet(param []string) error {
+	key := joinParam(cr.sortedSetKeyFormat, param)
+
+	removeSortedSet := cr.client.Del(context.TODO(), key)
+	if removeSortedSet.Err() != nil {
+		return removeSortedSet.Err()
+	}
+
+	return nil
+}
+
 func NewSortedSet[T item.Blueprint](client redis.UniversalClient, sortedSetKeyFormat string) *SortedSet[T] {
 	return &SortedSet[T]{
 		client:             client,
@@ -265,11 +276,7 @@ func (cr *Paginate[T]) GetDirection() string {
 	return cr.direction
 }
 
-func (cr *Paginate[T]) SetItem(item T, sortedSetParam []string, seed bool) error {
-	if err := cr.baseClient.Set(item); err != nil {
-		return err
-	}
-	// safety net
+func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error {
 	if cr.direction == "" {
 		return errors.New("must set direction!")
 	}
@@ -461,17 +468,6 @@ func (cr *Paginate[T]) DelBlankPage(param []string) error {
 	return nil
 }
 
-func (cr *Paginate[T]) DeleteSortedSet(param []string) error {
-	key := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
-
-	removeSortedSet := cr.client.Del(context.TODO(), key)
-	if removeSortedSet.Err() != nil {
-		return removeSortedSet.Err()
-	}
-
-	return nil
-}
-
 func (cr *Paginate[T]) Fetch(
 	param []string,
 	lastRandIds []string,
@@ -552,6 +548,10 @@ func (cr *Paginate[T]) Fetch(
 	return items, validLastRandId, position, nil
 }
 
+func (cr *Paginate[T]) FetchAll(param []string) ([]T, error) {
+	return FetchAll(cr.client, cr.baseClient, cr.sortedSetClient, param, cr.direction)
+}
+
 func (cr *Paginate[T]) RequriesSeeding(param []string, totalItems int64) (bool, error) {
 	isBlankPage, err := cr.IsBlankPage(param)
 	if err != nil {
@@ -573,6 +573,33 @@ func (cr *Paginate[T]) RequriesSeeding(param []string, totalItems int64) (bool, 
 	} else {
 		return false, nil
 	}
+}
+
+func (cr *Paginate[T]) RemovePagination(param []string) error {
+	err := cr.sortedSetClient.DeleteSortedSet(param)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (cr *Paginate[T]) PurgePagination(param []string) error {
+	items, err := cr.FetchAll(param)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		cr.baseClient.Del(item)
+	}
+
+	err = cr.sortedSetClient.DeleteSortedSet(param)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string) *Paginate[T] {
@@ -630,44 +657,34 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 }
 
 func (srtd *Sorted[T]) Fetch(param []string) ([]T, error) {
-	var items []T
-	var extendTTL bool
+	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
+}
 
-	if srtd.direction == "" {
-		return nil, errors.New("must set direction!")
+func (srtd *Sorted[T]) RemoveSorted(param []string) error {
+	err := srtd.sortedSetClient.DeleteSortedSet(param)
+	if err != nil {
+		return err
 	}
 
-	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, param)
+	return nil
+}
 
-	var result *redis.StringSliceCmd
-	if srtd.direction == Descending {
-		result = srtd.client.ZRevRange(context.TODO(), sortedSetKey, 0, -1)
-	} else {
-		result = srtd.client.ZRange(context.TODO(), sortedSetKey, 0, -1)
+func (srtd *Sorted[T]) PurgeSorted(param []string) error {
+	items, err := srtd.Fetch(param)
+	if err != nil {
+		return err
 	}
 
-	if result.Err() != nil {
-		return nil, result.Err()
-	}
-	listRandIds := result.Val()
-
-	for i := 0; i < len(listRandIds); i++ {
-		if !extendTTL {
-			extendTTL = true
-		}
-
-		item, err := srtd.baseClient.Get(listRandIds[i])
-		if err != nil {
-			continue
-		}
-		items = append(items, item)
+	for _, item := range items {
+		srtd.baseClient.Del(item)
 	}
 
-	if extendTTL {
-		srtd.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
+	err = srtd.sortedSetClient.DeleteSortedSet(param)
+	if err != nil {
+		return err
 	}
 
-	return items, nil
+	return nil
 }
 
 func NewSorted[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, direction string) *Sorted[T] {
@@ -682,4 +699,45 @@ func NewSorted[T item.Blueprint](client redis.UniversalClient, baseClient *Base[
 		sortedSetClient: sortedSetClient,
 		direction:       direction,
 	}
+}
+
+func FetchAll[T item.Blueprint](redisClient redis.UniversalClient, baseClient *Base[T], sortedSetClient *SortedSet[T], param []string, direction string) ([]T, error) {
+	var items []T
+	var extendTTL bool
+
+	if direction == "" {
+		return nil, errors.New("must set direction!")
+	}
+
+	sortedSetKey := joinParam(sortedSetClient.sortedSetKeyFormat, param)
+
+	var result *redis.StringSliceCmd
+	if direction == Descending {
+		result = redisClient.ZRevRange(context.TODO(), sortedSetKey, 0, -1)
+	} else {
+		result = redisClient.ZRange(context.TODO(), sortedSetKey, 0, -1)
+	}
+
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+	listRandIds := result.Val()
+
+	for i := 0; i < len(listRandIds); i++ {
+		if !extendTTL {
+			extendTTL = true
+		}
+
+		item, err := baseClient.Get(listRandIds[i])
+		if err != nil {
+			continue
+		}
+		items = append(items, item)
+	}
+
+	if extendTTL {
+		redisClient.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
+	}
+
+	return items, nil
 }
