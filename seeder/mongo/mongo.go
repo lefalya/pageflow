@@ -74,12 +74,10 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	if validLastRandId != "" {
 		reference, err = m.FindOne("randid", validLastRandId, initItem)
 		if err != nil {
-			if errors.Is(err, mongo.ErrNoDocuments) {
-				firstPage = true
-				withReference = false
-			} else {
-				return err
+			if err == mongo.ErrNoDocuments {
+				return DocumentOrReferencesNotFound
 			}
+			return err
 		} else {
 			withReference = true
 		}
@@ -137,8 +135,6 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	} else if firstPage && counterLoop > 0 && counterLoop < m.paginationClient.GetItemPerPage() {
 		m.paginationClient.SetFirstPage([]string{paginateKey})
 	} else if validLastRandId != "" && counterLoop < m.paginationClient.GetItemPerPage() {
-		// ada peluang orang kalau input reference ngasal, bisa secara langsung memforce lastPage = truel, padahal belum tentu.
-		// perlu dicheck juga apakah terdapat item pada sorted set terkait. atau setidaknya reference harus valid sebelum bisa digunakan untuk ingestion.
 		m.paginationClient.SetLastPage([]string{paginateKey})
 	}
 
