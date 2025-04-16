@@ -44,15 +44,10 @@ func (m *MongoSeeder[T]) SeedOne(key string, value string, initItem func() T) er
 		return err
 	}
 
-	err = m.baseClient.Set(item)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return m.baseClient.Set(item)
 }
 
-func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, query bson.D, paginateKey string, initItem func() T) error {
+func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, query bson.D, paginationParams []string, initItem func() T) error {
 	var cursor *mongo.Cursor
 	var reference T
 	var withReference bool
@@ -126,16 +121,16 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 		}
 
 		m.baseClient.Set(item)
-		m.paginationClient.AddItem(item, []string{paginateKey}, true)
+		m.paginationClient.AddItem(item, paginationParams, true)
 		counterLoop++
 	}
 
 	if firstPage && counterLoop == 0 {
-		m.paginationClient.SetBlankPage([]string{paginateKey})
+		m.paginationClient.SetBlankPage(paginationParams)
 	} else if firstPage && counterLoop > 0 && counterLoop < m.paginationClient.GetItemPerPage() {
-		m.paginationClient.SetFirstPage([]string{paginateKey})
+		m.paginationClient.SetFirstPage(paginationParams)
 	} else if validLastRandId != "" && counterLoop < m.paginationClient.GetItemPerPage() {
-		m.paginationClient.SetLastPage([]string{paginateKey})
+		m.paginationClient.SetLastPage(paginationParams)
 	}
 
 	return nil
