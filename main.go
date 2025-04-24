@@ -459,8 +459,8 @@ func (cr *Paginate[T]) DelBlankPage(param []string) error {
 func (cr *Paginate[T]) Fetch(
 	param []string,
 	lastRandIds []string,
-	secure bool,
-	processor func(item *T, secure bool),
+	processorArgs []interface{},
+	processor func(item *T, args []interface{}),
 ) ([]T, string, string, error) {
 	var items []T
 	var validLastRandId string
@@ -515,11 +515,8 @@ func (cr *Paginate[T]) Fetch(
 		if err != nil {
 			continue
 		}
-		if !secure {
-			item.SecureUUID()
-		}
 		if processor != nil {
-			processor(&item, secure)
+			processor(&item, processorArgs)
 		}
 		items = append(items, item)
 		validLastRandId = listRandIds[i]
