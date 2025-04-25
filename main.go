@@ -264,7 +264,11 @@ func (cr *Paginate[T]) GetDirection() string {
 	return cr.direction
 }
 
-func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string, seed bool) error {
+func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string) error {
+	return cr.IngestItem(item, sortedSetParam, false)
+}
+
+func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) error {
 	if cr.direction == "" {
 		return errors.New("must set direction!")
 	}

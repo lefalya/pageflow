@@ -62,6 +62,10 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 	var errorDecode error
 	var compOp string
 
+	if query == nil {
+		query = bson.D{}
+	}
+
 	findOptions := options.Find()
 	if m.paginationClient.GetDirection() == pageflow.Ascending {
 		findOptions.SetSort(bson.D{{"_id", 1}})
@@ -126,7 +130,7 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 		}
 
 		m.baseClient.Set(item)
-		m.paginationClient.AddItem(item, paginateParams, true)
+		m.paginationClient.IngestItem(item, paginateParams, true)
 		counterLoop++
 	}
 
@@ -156,7 +160,7 @@ func (m *MongoSeeder[T]) SeedAll(query bson.D, listKey string, initItem func() T
 		}
 
 		m.baseClient.Set(item)
-		m.paginationClient.AddItem(item, []string{listKey}, true)
+		m.paginationClient.IngestItem(item, []string{listKey}, true)
 	}
 
 	return nil
