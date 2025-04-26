@@ -7,12 +7,41 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"time"
 )
 
 var (
 	NoDatabaseProvided           = errors.New("No database provided!")
 	DocumentOrReferencesNotFound = errors.New("Document or References not found!")
 )
+
+func BuildAttributeFilter(attrName string, value interface{}) bson.D {
+	return bson.D{{attrName, value}}
+}
+
+func BuildTimeRangeFilter(timeFieldName string, startTime, endTime time.Time) bson.D {
+	return bson.D{{timeFieldName, bson.D{
+		{"$gte", startTime},
+		{"$lte", endTime},
+	}}}
+}
+
+func CombineFilters(filters ...bson.D) bson.D {
+	if len(filters) == 0 {
+		return bson.D{}
+	}
+
+	if len(filters) == 1 {
+		return filters[0]
+	}
+
+	andConditions := make(bson.A, len(filters))
+	for i, filter := range filters {
+		andConditions[i] = filter
+	}
+
+	return bson.D{{"$and", andConditions}}
+}
 
 type MongoSeeder[T pageflow.MongoItemBlueprint] struct {
 	coll             *mongo.Collection
@@ -99,15 +128,15 @@ func (m *MongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, 
 		}
 
 		findOptions.SetLimit(limit)
-		filter = bson.D{
-			{"$and",
-				bson.A{
+		if len(query) == 0 {
+			filter = bson.D{{"_id", bson.D{{compOp, reference.GetObjectID()}}}}
+		} else {
+			filter = bson.D{
+				{"$and", bson.A{
 					query,
-					bson.D{
-						{"_id", bson.D{{compOp, reference.GetObjectID()}}},
-					},
-				},
-			},
+					bson.D{{"_id", bson.D{{compOp, reference.GetObjectID()}}}},
+				}},
+			}
 		}
 	} else {
 		filter = query
