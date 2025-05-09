@@ -241,6 +241,36 @@ func (cr *SortedSet[T]) DeleteSortedSet(param []string) error {
 	return nil
 }
 
+func (cr *SortedSet[T]) LowestScore(param []string) (float64, error) {
+	key := joinParam(cr.sortedSetKeyFormat, param)
+
+	result, err := cr.client.ZRangeWithScores(context.TODO(), key, 0, 0).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get lowest score: %w", err)
+	}
+
+	if len(result) == 0 {
+		return 0, fmt.Errorf("sorted set is empty")
+	}
+
+	return result[0].Score, nil
+}
+
+func (cr *SortedSet[T]) HighestScore(param []string) (float64, error) {
+	key := joinParam(cr.sortedSetKeyFormat, param)
+
+	result, err := cr.client.ZRangeWithScores(context.TODO(), key, -1, -1).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get highest score: %w", err)
+	}
+
+	if len(result) == 0 {
+		return 0, fmt.Errorf("sorted set is empty")
+	}
+
+	return result[0].Score, nil
+}
+
 func NewSortedSet[T item.Blueprint](client redis.UniversalClient, sortedSetKeyFormat string) *SortedSet[T] {
 	return &SortedSet[T]{
 		client:             client,
@@ -289,6 +319,8 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 		return err
 	}
 
+	currentItemScore := float64(item.GetCreatedAt().UnixMilli())
+
 	if !seed {
 		isBlankPage, errGet := cr.IsBlankPage(sortedSetParam)
 		if errGet != nil {
@@ -300,17 +332,33 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 
 		if cr.direction == Descending {
 			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
-				if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
-					cr.DelFirstPage(sortedSetParam)
+				lowestScore, err := cr.sortedSetClient.LowestScore(sortedSetParam)
+				if err != nil {
+					return err
 				}
-				return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+
+				if currentItemScore >= lowestScore {
+					if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
+						cr.DelFirstPage(sortedSetParam)
+					}
+					return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+				}
 			}
 		} else if cr.direction == Ascending {
-			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
-				return cr.DelFirstPage(sortedSetParam)
-			}
-			if isFirstPage || isLastPage {
-				return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
+				highestScore, err := cr.sortedSetClient.HighestScore(sortedSetParam)
+				if err != nil {
+					return err
+				}
+
+				if currentItemScore <= highestScore {
+					if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
+						return cr.DelFirstPage(sortedSetParam)
+					}
+					if isFirstPage || isLastPage {
+						return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+					}
+				}
 			}
 		}
 	} else {
@@ -677,9 +725,13 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 	return srtd.sortedSetClient.DeleteFromSortedSet(sortedSetParam, item)
 }
 
-func (srtd *Sorted[T]) Fetch(param []string) ([]T, error) {
+//func (srtd *Sorted[T]) FetchPartial() {}
+
+func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
 }
+
+//func (srted *Sorted[T]) FetchWithTimeRange() {}
 
 func (srtd *Sorted[T]) RemoveSorted(param []string) error {
 	err := srtd.sortedSetClient.DeleteSortedSet(param)
@@ -691,7 +743,7 @@ func (srtd *Sorted[T]) RemoveSorted(param []string) error {
 }
 
 func (srtd *Sorted[T]) PurgeSorted(param []string) error {
-	items, err := srtd.Fetch(param)
+	items, err := srtd.FetchAll(param)
 	if err != nil {
 		return err
 	}
