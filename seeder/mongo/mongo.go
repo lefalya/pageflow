@@ -47,12 +47,7 @@ func (m *PaginateMongoSeeder[T]) SeedOne(key string, value string, initItem func
 		return err
 	}
 
-	err = m.baseClient.Set(item)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return m.baseClient.Set(item)
 }
 
 func (m *PaginateMongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId string, query bson.D, paginateParams []string, initItem func() T) error {
