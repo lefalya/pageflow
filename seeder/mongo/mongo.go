@@ -180,6 +180,23 @@ func (m *PaginateMongoSeeder[T]) SeedAll(query bson.D, listParam []string, initI
 	return nil
 }
 
+func NewPaginateMongoSeederWithReference[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T], sortingReference string) *PaginateMongoSeeder[T] {
+	return &PaginateMongoSeeder[T]{
+		coll:             coll,
+		baseClient:       baseClient,
+		paginationClient: paginateClient,
+		scoringField:     sortingReference,
+	}
+}
+
+func NewPaginateMongoSeeder[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *PaginateMongoSeeder[T] {
+	return &PaginateMongoSeeder[T]{
+		coll:             coll,
+		baseClient:       baseClient,
+		paginationClient: paginateClient,
+	}
+}
+
 type SortedMongoSeeder[T pageflow.MongoItemBlueprint] struct {
 	coll         *mongo.Collection
 	baseClient   *pageflow.Base[T]
@@ -224,23 +241,6 @@ func getFieldValue(obj interface{}, fieldName string) interface{} {
 	}
 
 	return field.Interface()
-}
-
-func NewPaginateMongoSeederWithReference[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T], sortingReference string) *PaginateMongoSeeder[T] {
-	return &PaginateMongoSeeder[T]{
-		coll:             coll,
-		baseClient:       baseClient,
-		paginationClient: paginateClient,
-		scoringField:     sortingReference,
-	}
-}
-
-func NewPaginateMongoSeeder[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *PaginateMongoSeeder[T] {
-	return &PaginateMongoSeeder[T]{
-		coll:             coll,
-		baseClient:       baseClient,
-		paginationClient: paginateClient,
-	}
 }
 
 func NewSortedMongoSeederWithReference[T pageflow.MongoItemBlueprint](coll *mongo.Collection, baseClient *pageflow.Base[T], sortedClient *pageflow.Sorted[T], sortingReference string) *SortedMongoSeeder[T] {

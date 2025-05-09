@@ -753,13 +753,9 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 	return srtd.sortedSetClient.DeleteFromSortedSet(sortedSetParam, item)
 }
 
-//func (srtd *Sorted[T]) FetchPartial() {}
-
 func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
 }
-
-//func (srted *Sorted[T]) FetchWithTimeRange() {}
 
 func (srtd *Sorted[T]) RemoveSorted(param []string) error {
 	err := srtd.sortedSetClient.DeleteSortedSet(param)

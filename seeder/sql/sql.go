@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/lefalya/pageflow"
+	"reflect"
+	"time"
 )
 
 var (
@@ -14,27 +16,28 @@ var (
 	NilConfiguration             = errors.New("No configuration found!")
 )
 
-type RowScanner[T pageflow.MongoItemBlueprint] func(row *sql.Row) (T, error)
+type RowScanner[T pageflow.SQLItemBlueprint] func(row *sql.Row) (T, error)
 
-type RowsScanner[T pageflow.MongoItemBlueprint] func(rows *sql.Rows) (T, error)
+type RowsScanner[T pageflow.SQLItemBlueprint] func(rows *sql.Rows) (T, error)
 
-type SQLSeederConfig[T pageflow.MongoItemBlueprint] struct {
-	RowQuery        string
-	RowScanner      RowScanner[T]
-	SelectManyQuery string
-	FirstPageQuery  string
-	NextPageQuery   string
-	RowsScanner     RowsScanner[T]
+type SQLSeederConfig[T pageflow.SQLItemBlueprint] struct {
+	RowQuery       string
+	RowScanner     RowScanner[T]
+	SelectAllQuery string
+	FirstPageQuery string
+	NextPageQuery  string
+	RowsScanner    RowsScanner[T]
 }
 
-type SQLSeeder[T pageflow.MongoItemBlueprint] struct {
+type PaginateSQLSeeder[T pageflow.SQLItemBlueprint] struct {
 	db               *sql.DB
 	baseClient       *pageflow.Base[T]
 	paginationClient *pageflow.Paginate[T]
 	config           *SQLSeederConfig[T]
+	scoringField     string
 }
 
-func (s *SQLSeeder[T]) FindOne(queryArgs []interface{}) (T, error) {
+func (s *PaginateSQLSeeder[T]) FindOne(queryArgs []interface{}) (T, error) {
 	var item T
 	if s.db == nil {
 		return item, NoDatabaseProvided
@@ -57,7 +60,7 @@ func (s *SQLSeeder[T]) FindOne(queryArgs []interface{}) (T, error) {
 	return item, nil
 }
 
-func (s *SQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
+func (s *PaginateSQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
 	item, err := s.FindOne(queryArgs)
 	if err != nil {
 		return err
@@ -66,10 +69,10 @@ func (s *SQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
 	return s.baseClient.Set(item)
 }
 
-func (s *SQLSeeder[T]) SeedPartial(
+func (s *PaginateSQLSeeder[T]) SeedPartial(
 	queryArgs []interface{},
 	lastRandId string,
-	paginateKey string,
+	paginateParams []string,
 ) error {
 	var firstPage bool
 	var queryToUse string
@@ -86,12 +89,18 @@ func (s *SQLSeeder[T]) SeedPartial(
 		firstPage = true
 		queryToUse = s.config.FirstPageQuery
 	} else {
-		_, err := s.FindOne([]interface{}{lastRandId})
+		reference, err := s.FindOne([]interface{}{lastRandId})
 		if err != nil {
 			return DocumentOrReferencesNotFound
 		} else {
 			firstPage = false
 			queryToUse = s.config.NextPageQuery
+
+			if s.scoringField != "" {
+				queryArgs = append(queryArgs, getFieldValue(reference, s.scoringField))
+			} else {
+				queryArgs = append(queryArgs, reference.GetCreatedAt())
+			}
 		}
 	}
 
@@ -109,24 +118,46 @@ func (s *SQLSeeder[T]) SeedPartial(
 		}
 
 		s.baseClient.Set(item)
-		s.paginationClient.AddItem(item, []string{paginateKey}, true)
+		s.paginationClient.IngestItem(item, paginateParams, true)
 		counterLoop++
 	}
 
 	if firstPage && counterLoop == 0 {
-		s.paginationClient.SetBlankPage([]string{paginateKey})
+		s.paginationClient.SetBlankPage(paginateParams)
 	} else if firstPage && counterLoop > 0 && counterLoop < s.paginationClient.GetItemPerPage() {
-		s.paginationClient.SetFirstPage([]string{paginateKey})
+		s.paginationClient.SetFirstPage(paginateParams)
 	} else if !firstPage && counterLoop < s.paginationClient.GetItemPerPage() {
-		s.paginationClient.SetLastPage([]string{paginateKey})
+		s.paginationClient.SetLastPage(paginateParams)
 	}
 
 	return nil
 }
 
-func (s *SQLSeeder[T]) SeedAll(
+func NewPaginateSQLSeeder[T pageflow.SQLItemBlueprint](
+	db *sql.DB,
+	baseClient *pageflow.Base[T],
+	paginateClient *pageflow.Paginate[T],
+	config *SQLSeederConfig[T],
+) *PaginateSQLSeeder[T] {
+	return &PaginateSQLSeeder[T]{
+		db:               db,
+		baseClient:       baseClient,
+		paginationClient: paginateClient,
+		config:           config,
+	}
+}
+
+type SortedSQLSeeder[T pageflow.SQLItemBlueprint] struct {
+	db           *sql.DB
+	baseClient   *pageflow.Base[T]
+	sortedClient *pageflow.Sorted[T]
+	config       *SQLSeederConfig[T]
+	scoringField string
+}
+
+func (s *SortedSQLSeeder[T]) SeedAll(
 	args []interface{},
-	listKey string,
+	param []string,
 ) error {
 	if s.db == nil {
 		return NoDatabaseProvided
@@ -136,7 +167,7 @@ func (s *SQLSeeder[T]) SeedAll(
 		return QueryOrScannerNotConfigured
 	}
 
-	rows, err := s.db.QueryContext(context.TODO(), s.config.SelectManyQuery, args...)
+	rows, err := s.db.QueryContext(context.TODO(), s.config.SelectAllQuery, args...)
 	if err != nil {
 		return err
 	}
@@ -149,22 +180,40 @@ func (s *SQLSeeder[T]) SeedAll(
 		}
 
 		s.baseClient.Set(item)
-		s.paginationClient.AddItem(item, []string{listKey}, true)
+		s.sortedClient.IngestItem(item, param, true)
 	}
 
 	return nil
 }
 
-func NewSQLSeeder[T pageflow.MongoItemBlueprint](
+func NewSortedSQLSeeder[T pageflow.SQLItemBlueprint](
 	db *sql.DB,
 	baseClient *pageflow.Base[T],
-	paginateClient *pageflow.Paginate[T],
+	sortedClient *pageflow.Sorted[T],
 	config *SQLSeederConfig[T],
-) *SQLSeeder[T] {
-	return &SQLSeeder[T]{
-		db:               db,
-		baseClient:       baseClient,
-		paginationClient: paginateClient,
-		config:           config,
+) *SortedSQLSeeder[T] {
+	return &SortedSQLSeeder[T]{
+		db:           db,
+		baseClient:   baseClient,
+		sortedClient: sortedClient,
+		config:       config,
 	}
+}
+
+func getFieldValue(obj interface{}, fieldName string) interface{} {
+	val := reflect.ValueOf(obj)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+
+	if val.Kind() != reflect.Struct {
+		return time.Time{}
+	}
+
+	field := val.FieldByName(fieldName)
+	if !field.IsValid() {
+		return time.Time{}
+	}
+
+	return field.Interface()
 }
