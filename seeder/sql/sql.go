@@ -71,6 +71,7 @@ func (s *PaginateSQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
 
 func (s *PaginateSQLSeeder[T]) SeedPartial(
 	queryArgs []interface{},
+	subtraction int64,
 	lastRandId string,
 	paginateParams []string,
 ) error {
@@ -103,6 +104,14 @@ func (s *PaginateSQLSeeder[T]) SeedPartial(
 			}
 		}
 	}
+
+	var limit int64
+	if subtraction > 0 {
+		limit = s.paginationClient.GetItemPerPage() - subtraction
+	} else {
+		limit = s.paginationClient.GetItemPerPage()
+	}
+	queryToUse = queryToUse + `LIMIT ` + string(limit)
 
 	rows, err := s.db.QueryContext(context.TODO(), queryToUse, queryArgs...)
 	if err != nil {
