@@ -138,7 +138,7 @@ type SortedSQLSeeder[T pageflow.SQLItemBlueprint] struct {
 	scoringField string
 }
 
-func (s *SortedSQLSeeder[T]) SeedAll(
+func (s *SortedSQLSeeder[T]) Seed(
 	query string,
 	rowsScanner RowsScanner[T],
 	args []interface{},

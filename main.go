@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"math/rand"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -713,11 +714,13 @@ func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Bas
 }
 
 type Sorted[T item.Blueprint] struct {
-	client           redis.UniversalClient
-	baseClient       *Base[T]
-	sortedSetClient  *SortedSet[T]
-	direction        string
-	sortingReference string
+	client                  redis.UniversalClient
+	baseClient              *Base[T]
+	sortedSetClient         *SortedSet[T]
+	direction               string
+	sortingReference        string
+	mostRecentItemOnCache   time.Time
+	mostEarliestItemOnCache time.Time
 }
 
 func (srtd *Sorted[T]) SetDirection(direction string) {
@@ -726,6 +729,10 @@ func (srtd *Sorted[T]) SetDirection(direction string) {
 	} else {
 		srtd.direction = direction
 	}
+}
+
+func (srtd *Sorted[T]) GetDirection() string {
+	return srtd.direction
 }
 
 func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) {
@@ -755,6 +762,91 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 
 func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
+}
+
+func (srtd *Sorted[T]) FetchTimeRange(
+	param []string,
+	upperbound time.Time,
+	lowerbound time.Time,
+	processorArgs []interface{},
+	processor func(item *T, args []interface{})) ([]T, error) {
+	var items []T
+	var result *redis.StringSliceCmd
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, param)
+
+	if srtd.direction == "" {
+		return nil, errors.New("must set direction!")
+	}
+
+	opt := &redis.ZRangeBy{
+		Min: strconv.FormatInt(lowerbound.UnixMilli(), 10),
+		Max: strconv.FormatInt(upperbound.UnixMilli(), 10),
+	}
+
+	if srtd.direction == Ascending {
+		result = srtd.client.ZRangeByScore(context.TODO(), sortedSetKey, opt)
+	} else if srtd.direction == Descending {
+		result = srtd.client.ZRevRangeByScore(context.TODO(), sortedSetKey, opt)
+	}
+
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+	listRandIds := result.Val()
+
+	srtd.client.Expire(context.TODO(), sortedSetKey, SORTED_SET_TTL)
+
+	for i := 0; i < len(listRandIds); i++ {
+		item, err := srtd.baseClient.Get(listRandIds[i])
+		if err != nil {
+			continue
+		}
+		if processor != nil {
+			processor(&item, processorArgs)
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (srtd *Sorted[T]) RequireSeedingTimeRange(param []string, upperbound time.Time, lowerbound time.Time) (bool, [][]time.Time) {
+	var ruWithin bool
+	var rlWithin bool
+	var ruAboveU bool
+	var rlBelowL bool
+	seedingRange := make([][]time.Time, 2)
+
+	if srtd.mostEarliestItemOnCache.UnixMilli() <= upperbound.UnixMilli() && upperbound.UnixMilli() <= srtd.mostRecentItemOnCache.UnixMilli() {
+		ruWithin = true
+	}
+	if srtd.mostEarliestItemOnCache.UnixMilli() <= lowerbound.UnixMilli() && lowerbound.UnixMilli() <= srtd.mostRecentItemOnCache.UnixMilli() {
+		rlWithin = true
+	}
+	if upperbound.UnixMilli() > srtd.mostRecentItemOnCache.UnixMilli() {
+		ruAboveU = true
+	}
+	if lowerbound.UnixMilli() < srtd.mostEarliestItemOnCache.UnixMilli() {
+		rlBelowL = true
+	}
+
+	if ruWithin && !rlWithin && rlBelowL {
+		seedingRange[0][0] = lowerbound
+		seedingRange[0][1] = srtd.mostEarliestItemOnCache
+		return true, seedingRange
+	} else if rlWithin && !ruWithin && ruAboveU {
+		seedingRange[0][0] = srtd.mostRecentItemOnCache
+		seedingRange[0][1] = upperbound
+		return true, seedingRange
+	} else if ruAboveU && rlBelowL {
+		seedingRange[0][0] = lowerbound
+		seedingRange[0][1] = srtd.mostEarliestItemOnCache
+		seedingRange[1][0] = srtd.mostRecentItemOnCache
+		seedingRange[1][1] = upperbound
+		return true, seedingRange
+	}
+
+	return false, nil
 }
 
 func (srtd *Sorted[T]) RemoveSorted(param []string) error {

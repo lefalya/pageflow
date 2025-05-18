@@ -198,13 +198,15 @@ func NewPaginateMongoSeeder[T pageflow.MongoItemBlueprint](coll *mongo.Collectio
 }
 
 type SortedMongoSeeder[T pageflow.MongoItemBlueprint] struct {
-	coll         *mongo.Collection
-	baseClient   *pageflow.Base[T]
-	sortedClient *pageflow.Sorted[T]
-	scoringField string
+	coll                    *mongo.Collection
+	baseClient              *pageflow.Base[T]
+	sortedClient            *pageflow.Sorted[T]
+	scoringField            string
+	mostRecentItemOnCache   time.Time
+	mostEarliestItemOnCache time.Time
 }
 
-func (s *SortedMongoSeeder[T]) Seed(query bson.D, listParam []string, initItem func() T) error {
+func (s *SortedMongoSeeder[T]) SeedAll(query bson.D, keyParams []string, initItem func() T) error {
 	cursor, err := s.coll.Find(context.TODO(), query)
 	if err != nil {
 		return err
@@ -219,7 +221,57 @@ func (s *SortedMongoSeeder[T]) Seed(query bson.D, listParam []string, initItem f
 		}
 
 		s.baseClient.Set(item)
-		s.sortedClient.IngestItem(item, listParam, true)
+		s.sortedClient.IngestItem(item, keyParams, true)
+	}
+
+	return nil
+}
+
+func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string, upperbound time.Time, lowerbound time.Time, initItem func() T) error {
+	var sortField string
+
+	if s.scoringField != "" {
+		sortField = s.scoringField
+	} else {
+		sortField = "_id"
+	}
+
+	findOptions := options.Find()
+	if s.sortedClient.GetDirection() == pageflow.Ascending {
+		findOptions.SetSort(bson.D{{sortField, 1}})
+	} else {
+		findOptions.SetSort(bson.D{{sortField, -1}})
+	}
+
+	filter := bson.D{
+		{"$and",
+			bson.A{
+				query,
+				bson.D{
+					{sortField, bson.D{{"$lte", upperbound}}},
+				},
+				bson.D{
+					{sortField, bson.D{{"gte", lowerbound}}},
+				},
+			},
+		},
+	}
+
+	cursor, err := s.coll.Find(context.TODO(), filter, findOptions)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(context.TODO())
+
+	for cursor.Next(context.TODO()) {
+		item := initItem()
+		errorDecode := cursor.Decode(&item)
+		if errorDecode != nil {
+			continue
+		}
+
+		s.baseClient.Set(item)
+		s.sortedClient.IngestItem(item, keyParams, true)
 	}
 
 	return nil
