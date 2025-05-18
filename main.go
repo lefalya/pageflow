@@ -92,6 +92,34 @@ func InitMongoItem[T MongoItemBlueprint](mongoItem T) {
 	mongoItem.SetObjectID()
 }
 
+type SQLItemBlueprint interface {
+	item.Blueprint
+	GetSelf() *SQLItem
+}
+
+type SQLItem struct {
+	*item.Foundation `json:",inline" bson:",inline"`
+}
+
+func (si *SQLItem) GetSelf() *SQLItem { return si }
+
+func InitSQLItem[T SQLItemBlueprint](sqlItem T) {
+	value := reflect.ValueOf(sqlItem).Elem()
+
+	// Iterate through the fields of the struct
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+
+		// Check if the field is a pointer and is nil
+		if field.Kind() == reflect.Ptr && field.IsNil() {
+			// Allocate a new value for the pointer and set it
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+	}
+
+	item.InitItem(sqlItem.GetSelf())
+}
+
 type Base[T item.Blueprint] struct {
 	client        redis.UniversalClient
 	itemKeyFormat string
@@ -241,6 +269,36 @@ func (cr *SortedSet[T]) DeleteSortedSet(param []string) error {
 	return nil
 }
 
+func (cr *SortedSet[T]) LowestScore(param []string) (float64, error) {
+	key := joinParam(cr.sortedSetKeyFormat, param)
+
+	result, err := cr.client.ZRangeWithScores(context.TODO(), key, 0, 0).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get lowest score: %w", err)
+	}
+
+	if len(result) == 0 {
+		return 0, fmt.Errorf("sorted set is empty")
+	}
+
+	return result[0].Score, nil
+}
+
+func (cr *SortedSet[T]) HighestScore(param []string) (float64, error) {
+	key := joinParam(cr.sortedSetKeyFormat, param)
+
+	result, err := cr.client.ZRangeWithScores(context.TODO(), key, -1, -1).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get highest score: %w", err)
+	}
+
+	if len(result) == 0 {
+		return 0, fmt.Errorf("sorted set is empty")
+	}
+
+	return result[0].Score, nil
+}
+
 func NewSortedSet[T item.Blueprint](client redis.UniversalClient, sortedSetKeyFormat string) *SortedSet[T] {
 	return &SortedSet[T]{
 		client:             client,
@@ -249,11 +307,12 @@ func NewSortedSet[T item.Blueprint](client redis.UniversalClient, sortedSetKeyFo
 }
 
 type Paginate[T item.Blueprint] struct {
-	client          redis.UniversalClient
-	baseClient      *Base[T]
-	sortedSetClient *SortedSet[T]
-	itemPerPage     int64
-	direction       string
+	client           redis.UniversalClient
+	baseClient       *Base[T]
+	sortedSetClient  *SortedSet[T]
+	itemPerPage      int64
+	direction        string
+	sortingReference string
 }
 
 func (cr *Paginate[T]) GetItemPerPage() int64 {
@@ -273,6 +332,11 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 		return errors.New("must set direction!")
 	}
 
+	score, err := getItemScore(item, cr.sortingReference)
+	if err != nil {
+		return err
+	}
+
 	isFirstPage, err := cr.IsFirstPage(sortedSetParam)
 	if err != nil {
 		return err
@@ -282,6 +346,8 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 	if err != nil {
 		return err
 	}
+
+	currentItemScore := float64(item.GetCreatedAt().UnixMilli())
 
 	if !seed {
 		isBlankPage, errGet := cr.IsBlankPage(sortedSetParam)
@@ -294,21 +360,37 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 
 		if cr.direction == Descending {
 			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
-				if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
-					cr.DelFirstPage(sortedSetParam)
+				lowestScore, err := cr.sortedSetClient.LowestScore(sortedSetParam)
+				if err != nil {
+					return err
 				}
-				return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+
+				if currentItemScore >= lowestScore {
+					if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
+						cr.DelFirstPage(sortedSetParam)
+					}
+					return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+				}
 			}
 		} else if cr.direction == Ascending {
-			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
-				return cr.DelFirstPage(sortedSetParam)
-			}
-			if isFirstPage || isLastPage {
-				return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+			if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
+				highestScore, err := cr.sortedSetClient.HighestScore(sortedSetParam)
+				if err != nil {
+					return err
+				}
+
+				if currentItemScore <= highestScore {
+					if cr.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) == cr.itemPerPage && isFirstPage {
+						return cr.DelFirstPage(sortedSetParam)
+					}
+					if isFirstPage || isLastPage {
+						return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
+					}
+				}
 			}
 		}
 	} else {
-		return cr.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+		return cr.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
 	}
 
 	return nil
@@ -591,6 +673,26 @@ func (cr *Paginate[T]) PurgePagination(param []string) error {
 	return nil
 }
 
+func NewPaginateWithReference[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string, sortingReference string) *Paginate[T] {
+	if direction != Ascending && direction != Descending {
+		direction = Descending
+	}
+
+	sortedSetClient := SortedSet[T]{
+		client:             client,
+		sortedSetKeyFormat: keyFormat,
+	}
+
+	return &Paginate[T]{
+		client:           client,
+		baseClient:       baseClient,
+		sortedSetClient:  &sortedSetClient,
+		itemPerPage:      itemPerPage,
+		direction:        direction,
+		sortingReference: sortingReference,
+	}
+}
+
 func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, itemPerPage int64, direction string) *Paginate[T] {
 	if direction != Ascending && direction != Descending {
 		direction = Descending
@@ -611,10 +713,11 @@ func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Bas
 }
 
 type Sorted[T item.Blueprint] struct {
-	client          redis.UniversalClient
-	baseClient      *Base[T]
-	sortedSetClient *SortedSet[T]
-	direction       string
+	client           redis.UniversalClient
+	baseClient       *Base[T]
+	sortedSetClient  *SortedSet[T]
+	direction        string
+	sortingReference string
 }
 
 func (srtd *Sorted[T]) SetDirection(direction string) {
@@ -625,17 +728,22 @@ func (srtd *Sorted[T]) SetDirection(direction string) {
 	}
 }
 
-func (srtd *Sorted[T]) UpsertItem(item T, sortedSetParam []string, seed bool) error {
-	if err := srtd.baseClient.Set(item); err != nil {
+func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) {
+	srtd.IngestItem(item, sortedSetParam, false)
+}
+
+func (srtd *Sorted[T]) IngestItem(item T, sortedSetParam []string, seed bool) error {
+	score, err := getItemScore(item, srtd.sortingReference)
+	if err != nil {
 		return err
 	}
 
 	if !seed {
 		if srtd.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
-			return srtd.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+			return srtd.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
 		}
 	} else {
-		return srtd.sortedSetClient.SetSortedSet(sortedSetParam, float64(item.GetCreatedAt().UnixMilli()), item)
+		return srtd.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
 	}
 
 	return nil
@@ -645,7 +753,7 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 	return srtd.sortedSetClient.DeleteFromSortedSet(sortedSetParam, item)
 }
 
-func (srtd *Sorted[T]) Fetch(param []string) ([]T, error) {
+func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
 }
 
@@ -659,7 +767,7 @@ func (srtd *Sorted[T]) RemoveSorted(param []string) error {
 }
 
 func (srtd *Sorted[T]) PurgeSorted(param []string) error {
-	items, err := srtd.Fetch(param)
+	items, err := srtd.FetchAll(param)
 	if err != nil {
 		return err
 	}
@@ -674,6 +782,21 @@ func (srtd *Sorted[T]) PurgeSorted(param []string) error {
 	}
 
 	return nil
+}
+
+func NewSortedWithReference[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, direction string, sortingReference string) *Sorted[T] {
+	sortedSetClient := &SortedSet[T]{
+		client:             client,
+		sortedSetKeyFormat: keyFormat,
+	}
+
+	return &Sorted[T]{
+		client:           client,
+		baseClient:       baseClient,
+		sortedSetClient:  sortedSetClient,
+		direction:        direction,
+		sortingReference: sortingReference,
+	}
 }
 
 func NewSorted[T item.Blueprint](client redis.UniversalClient, baseClient *Base[T], keyFormat string, direction string) *Sorted[T] {
@@ -729,4 +852,40 @@ func FetchAll[T item.Blueprint](redisClient redis.UniversalClient, baseClient *B
 	}
 
 	return items, nil
+}
+
+func getItemScore[T item.Blueprint](item T, sortingReference string) (float64, error) {
+	if sortingReference == "" || sortingReference == "createdAt" {
+		if scorer, ok := interface{}(item).(interface{ GetCreatedAt() time.Time }); ok {
+			return float64(scorer.GetCreatedAt().UnixMilli()), nil
+		}
+	}
+
+	val := reflect.ValueOf(item)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+
+	if val.Kind() != reflect.Struct {
+		return 0, errors.New("getItemScore: item must be a struct or pointer to struct")
+	}
+
+	field := val.FieldByName(sortingReference)
+	if !field.IsValid() {
+		return 0, fmt.Errorf("getItemScore: field %s not found in item", sortingReference)
+	}
+
+	switch field.Type() {
+	case reflect.TypeOf(time.Time{}):
+		return float64(field.Interface().(time.Time).UnixMilli()), nil
+	case reflect.TypeOf(&time.Time{}):
+		if field.IsNil() {
+			return 0, errors.New("getItemScore: time field is nil")
+		}
+		return float64(field.Interface().(*time.Time).UnixMilli()), nil
+	case reflect.TypeOf(int64(0)):
+		return float64(field.Interface().(int64)), nil
+	default:
+		return 0, fmt.Errorf("getItemScore: field %s is not a time.Time", sortingReference)
+	}
 }
