@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/lefalya/pageflow"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -20,36 +21,26 @@ type RowScanner[T pageflow.SQLItemBlueprint] func(row *sql.Row) (T, error)
 
 type RowsScanner[T pageflow.SQLItemBlueprint] func(rows *sql.Rows) (T, error)
 
-type SQLSeederConfig[T pageflow.SQLItemBlueprint] struct {
-	RowQuery       string
-	RowScanner     RowScanner[T]
-	SelectAllQuery string
-	FirstPageQuery string
-	NextPageQuery  string
-	RowsScanner    RowsScanner[T]
-}
-
 type PaginateSQLSeeder[T pageflow.SQLItemBlueprint] struct {
 	db               *sql.DB
 	baseClient       *pageflow.Base[T]
 	paginationClient *pageflow.Paginate[T]
-	config           *SQLSeederConfig[T]
 	scoringField     string
 }
 
-func (s *PaginateSQLSeeder[T]) FindOne(queryArgs []interface{}) (T, error) {
+func (s *PaginateSQLSeeder[T]) FindOne(rowQuery string, rowScanner RowScanner[T], queryArgs []interface{}) (T, error) {
 	var item T
 	if s.db == nil {
 		return item, NoDatabaseProvided
 	}
 
-	if s.config.RowQuery == "" || s.config.RowScanner == nil {
+	if rowQuery == "" || rowScanner == nil {
 		return item, QueryOrScannerNotConfigured
 	}
 
-	row := s.db.QueryRowContext(context.TODO(), s.config.RowQuery, queryArgs...)
+	row := s.db.QueryRowContext(context.TODO(), rowQuery, queryArgs...)
 
-	item, err := s.config.RowScanner(row)
+	item, err := rowScanner(row)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return item, DocumentOrReferencesNotFound
@@ -60,8 +51,8 @@ func (s *PaginateSQLSeeder[T]) FindOne(queryArgs []interface{}) (T, error) {
 	return item, nil
 }
 
-func (s *PaginateSQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
-	item, err := s.FindOne(queryArgs)
+func (s *PaginateSQLSeeder[T]) SeedOne(rowQuery string, rowScanner RowScanner[T], queryArgs []interface{}) error {
+	item, err := s.FindOne(rowQuery, rowScanner, queryArgs)
 	if err != nil {
 		return err
 	}
@@ -69,12 +60,7 @@ func (s *PaginateSQLSeeder[T]) SeedOne(queryArgs []interface{}) error {
 	return s.baseClient.Set(item)
 }
 
-func (s *PaginateSQLSeeder[T]) SeedPartial(
-	queryArgs []interface{},
-	subtraction int64,
-	lastRandId string,
-	paginateParams []string,
-) error {
+func (s *PaginateSQLSeeder[T]) SeedPartial(rowQuery string, firstPageQuery string, nextPageQuery string, rowScanner RowScanner[T], rowsScanner RowsScanner[T], queryArgs []interface{}, subtraction int64, lastRandId string, paginateParams []string) error {
 	var firstPage bool
 	var queryToUse string
 
@@ -82,21 +68,16 @@ func (s *PaginateSQLSeeder[T]) SeedPartial(
 		return NoDatabaseProvided
 	}
 
-	if s.config == nil {
-		return NilConfiguration
-	}
-
 	if lastRandId == "" {
 		firstPage = true
-		queryToUse = s.config.FirstPageQuery
+		queryToUse = firstPageQuery
 	} else {
-		reference, err := s.FindOne([]interface{}{lastRandId})
+		reference, err := s.FindOne(rowQuery, rowScanner, []interface{}{lastRandId})
 		if err != nil {
 			return DocumentOrReferencesNotFound
 		} else {
 			firstPage = false
-			queryToUse = s.config.NextPageQuery
-
+			queryToUse = nextPageQuery
 			if s.scoringField != "" {
 				queryArgs = append(queryArgs, getFieldValue(reference, s.scoringField))
 			} else {
@@ -111,7 +92,7 @@ func (s *PaginateSQLSeeder[T]) SeedPartial(
 	} else {
 		limit = s.paginationClient.GetItemPerPage()
 	}
-	queryToUse = queryToUse + `LIMIT ` + string(limit)
+	queryToUse = queryToUse + ` LIMIT ` + strconv.FormatInt(limit, 10)
 
 	rows, err := s.db.QueryContext(context.TODO(), queryToUse, queryArgs...)
 	if err != nil {
@@ -121,7 +102,7 @@ func (s *PaginateSQLSeeder[T]) SeedPartial(
 
 	var counterLoop int64 = 0
 	for rows.Next() {
-		item, err := s.config.RowsScanner(rows)
+		item, err := rowsScanner(rows)
 		if err != nil {
 			continue
 		}
@@ -135,24 +116,18 @@ func (s *PaginateSQLSeeder[T]) SeedPartial(
 		s.paginationClient.SetBlankPage(paginateParams)
 	} else if firstPage && counterLoop > 0 && counterLoop < s.paginationClient.GetItemPerPage() {
 		s.paginationClient.SetFirstPage(paginateParams)
-	} else if !firstPage && counterLoop < s.paginationClient.GetItemPerPage() {
+	} else if !firstPage && subtraction+counterLoop < s.paginationClient.GetItemPerPage() {
 		s.paginationClient.SetLastPage(paginateParams)
 	}
 
 	return nil
 }
 
-func NewPaginateSQLSeeder[T pageflow.SQLItemBlueprint](
-	db *sql.DB,
-	baseClient *pageflow.Base[T],
-	paginateClient *pageflow.Paginate[T],
-	config *SQLSeederConfig[T],
-) *PaginateSQLSeeder[T] {
+func NewPaginateSQLSeeder[T pageflow.SQLItemBlueprint](db *sql.DB, baseClient *pageflow.Base[T], paginateClient *pageflow.Paginate[T]) *PaginateSQLSeeder[T] {
 	return &PaginateSQLSeeder[T]{
 		db:               db,
 		baseClient:       baseClient,
 		paginationClient: paginateClient,
-		config:           config,
 	}
 }
 
@@ -160,11 +135,12 @@ type SortedSQLSeeder[T pageflow.SQLItemBlueprint] struct {
 	db           *sql.DB
 	baseClient   *pageflow.Base[T]
 	sortedClient *pageflow.Sorted[T]
-	config       *SQLSeederConfig[T]
 	scoringField string
 }
 
 func (s *SortedSQLSeeder[T]) SeedAll(
+	query string,
+	rowsScanner RowsScanner[T],
 	args []interface{},
 	param []string,
 ) error {
@@ -172,18 +148,18 @@ func (s *SortedSQLSeeder[T]) SeedAll(
 		return NoDatabaseProvided
 	}
 
-	if s.config.RowsScanner == nil {
+	if rowsScanner == nil {
 		return QueryOrScannerNotConfigured
 	}
 
-	rows, err := s.db.QueryContext(context.TODO(), s.config.SelectAllQuery, args...)
+	rows, err := s.db.QueryContext(context.TODO(), query, args...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		item, err := s.config.RowsScanner(rows)
+		item, err := rowsScanner(rows)
 		if err != nil {
 			continue
 		}
@@ -199,13 +175,11 @@ func NewSortedSQLSeeder[T pageflow.SQLItemBlueprint](
 	db *sql.DB,
 	baseClient *pageflow.Base[T],
 	sortedClient *pageflow.Sorted[T],
-	config *SQLSeederConfig[T],
 ) *SortedSQLSeeder[T] {
 	return &SortedSQLSeeder[T]{
 		db:           db,
 		baseClient:   baseClient,
 		sortedClient: sortedClient,
-		config:       config,
 	}
 }
 

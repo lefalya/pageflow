@@ -152,7 +152,7 @@ func (m *PaginateMongoSeeder[T]) SeedPartial(subtraction int64, validLastRandId 
 		m.paginationClient.SetBlankPage(paginateParams)
 	} else if firstPage && counterLoop > 0 && counterLoop < m.paginationClient.GetItemPerPage() {
 		m.paginationClient.SetFirstPage(paginateParams)
-	} else if validLastRandId != "" && counterLoop < m.paginationClient.GetItemPerPage() {
+	} else if validLastRandId != "" && subtraction+counterLoop < m.paginationClient.GetItemPerPage() {
 		m.paginationClient.SetLastPage(paginateParams)
 	}
 
