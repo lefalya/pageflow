@@ -714,13 +714,11 @@ func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Bas
 }
 
 type Sorted[T item.Blueprint] struct {
-	client                  redis.UniversalClient
-	baseClient              *Base[T]
-	sortedSetClient         *SortedSet[T]
-	direction               string
-	sortingReference        string
-	mostRecentItemOnCache   time.Time
-	mostEarliestItemOnCache time.Time
+	client           redis.UniversalClient
+	baseClient       *Base[T]
+	sortedSetClient  *SortedSet[T]
+	direction        string
+	sortingReference string
 }
 
 func (srtd *Sorted[T]) SetDirection(direction string) {
@@ -733,6 +731,93 @@ func (srtd *Sorted[T]) SetDirection(direction string) {
 
 func (srtd *Sorted[T]) GetDirection() string {
 	return srtd.direction
+}
+
+func (srtd *Sorted[T]) SetMostRecentItem(params []string, date time.Time) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	mostRecentTimeKey := sortedSetKey + ":mostrecenttime"
+
+	setRecentTime := srtd.client.Set(
+		context.TODO(),
+		mostRecentTimeKey,
+		date,
+		SORTED_SET_TTL,
+	)
+
+	if setRecentTime.Err() != nil {
+		return setRecentTime.Err()
+	}
+	return nil
+}
+
+func (srtd *Sorted[T]) SetMostEarliestItem(params []string, date time.Time) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	mostEarliestKey := sortedSetKey + ":mostearliesttime"
+
+	setEarliestTime := srtd.client.Set(
+		context.TODO(),
+		mostEarliestKey,
+		date,
+		SORTED_SET_TTL,
+	)
+
+	if setEarliestTime.Err() != nil {
+		return setEarliestTime.Err()
+	}
+	return nil
+}
+
+func (srtd *Sorted[T]) GetMostRecentItem(params []string) (*time.Time, error) {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	mostRecentTimeKey := sortedSetKey + ":mostrecenttime"
+
+	result := srtd.client.Get(
+		context.TODO(),
+		mostRecentTimeKey,
+	)
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	timeStr, err := result.Result()
+	if err != nil {
+		return nil, err
+	}
+
+	parsedTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parsedTime, nil
+}
+
+func (srtd *Sorted[T]) GetMostEarliestItem(params []string) (*time.Time, error) {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	mostEarliestKey := sortedSetKey + ":mostearliesttime"
+
+	result := srtd.client.Get(
+		context.TODO(),
+		mostEarliestKey,
+	)
+	if result.Err() != nil {
+		if result.Err() == redis.Nil {
+			return nil, nil
+		}
+		return nil, result.Err()
+	}
+
+	timeStr, err := result.Result()
+	if err != nil {
+		return nil, err
+	}
+
+	parsedTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parsedTime, nil
 }
 
 func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) {
@@ -810,43 +895,58 @@ func (srtd *Sorted[T]) FetchTimeRange(
 	return items, nil
 }
 
-func (srtd *Sorted[T]) RequireSeedingTimeRange(param []string, upperbound time.Time, lowerbound time.Time) (bool, [][]time.Time) {
+func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.Time, lowerbound time.Time) (bool, [][]time.Time, error) {
 	var ruWithin bool
 	var rlWithin bool
 	var ruAboveU bool
 	var rlBelowL bool
 	seedingRange := make([][]time.Time, 2)
 
-	if srtd.mostEarliestItemOnCache.UnixMilli() <= upperbound.UnixMilli() && upperbound.UnixMilli() <= srtd.mostRecentItemOnCache.UnixMilli() {
+	mostRecentTimeOnCache, err := srtd.GetMostRecentItem(params)
+	if err != nil {
+		return false, nil, err
+	}
+
+	mostEarliestTimeOnCache, err := srtd.GetMostEarliestItem(params)
+	if err != nil {
+		return false, nil, err
+	}
+
+	if mostRecentTimeOnCache == nil && mostEarliestTimeOnCache == nil {
+		seedingRange[0][0] = lowerbound
+		seedingRange[0][1] = upperbound
+		return true, seedingRange, nil
+	}
+	if mostEarliestTimeOnCache.UnixMilli() <= upperbound.UnixMilli() && upperbound.UnixMilli() <= mostRecentTimeOnCache.UnixMilli() {
 		ruWithin = true
 	}
-	if srtd.mostEarliestItemOnCache.UnixMilli() <= lowerbound.UnixMilli() && lowerbound.UnixMilli() <= srtd.mostRecentItemOnCache.UnixMilli() {
+	if mostEarliestTimeOnCache.UnixMilli() <= lowerbound.UnixMilli() && lowerbound.UnixMilli() <= mostRecentTimeOnCache.UnixMilli() {
 		rlWithin = true
 	}
-	if upperbound.UnixMilli() > srtd.mostRecentItemOnCache.UnixMilli() {
+	if upperbound.UnixMilli() > mostRecentTimeOnCache.UnixMilli() {
 		ruAboveU = true
 	}
-	if lowerbound.UnixMilli() < srtd.mostEarliestItemOnCache.UnixMilli() {
+	if lowerbound.UnixMilli() < mostEarliestTimeOnCache.UnixMilli() {
 		rlBelowL = true
 	}
 
 	if ruWithin && !rlWithin && rlBelowL {
 		seedingRange[0][0] = lowerbound
-		seedingRange[0][1] = srtd.mostEarliestItemOnCache
-		return true, seedingRange
+		seedingRange[0][1] = *mostEarliestTimeOnCache
+		return true, seedingRange, nil
 	} else if rlWithin && !ruWithin && ruAboveU {
-		seedingRange[0][0] = srtd.mostRecentItemOnCache
+		seedingRange[0][0] = *mostRecentTimeOnCache
 		seedingRange[0][1] = upperbound
-		return true, seedingRange
+		return true, seedingRange, nil
 	} else if ruAboveU && rlBelowL {
 		seedingRange[0][0] = lowerbound
-		seedingRange[0][1] = srtd.mostEarliestItemOnCache
-		seedingRange[1][0] = srtd.mostRecentItemOnCache
+		seedingRange[0][1] = *mostEarliestTimeOnCache
+		seedingRange[1][0] = *mostRecentTimeOnCache
 		seedingRange[1][1] = upperbound
-		return true, seedingRange
+		return true, seedingRange, nil
 	}
 
-	return false, nil
+	return false, nil, nil
 }
 
 func (srtd *Sorted[T]) RemoveSorted(param []string) error {

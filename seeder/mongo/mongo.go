@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/lefalya/pageflow"
+	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -207,6 +208,10 @@ type SortedMongoSeeder[T pageflow.MongoItemBlueprint] struct {
 }
 
 func (s *SortedMongoSeeder[T]) SeedAll(query bson.D, keyParams []string, initItem func() T) error {
+	if query == nil {
+		query = bson.D{}
+	}
+
 	cursor, err := s.coll.Find(context.TODO(), query)
 	if err != nil {
 		return err
@@ -272,6 +277,19 @@ func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string,
 
 		s.baseClient.Set(item)
 		s.sortedClient.IngestItem(item, keyParams, true)
+	}
+
+	mostEarliestTimeOnCache, err := s.sortedClient.GetMostEarliestItem(keyParams)
+	if err != nil {
+		if err == redis.Nil {
+
+		}
+	}
+
+	if s.sortedClient.GetDirection() == pageflow.Ascending {
+
+		if mostEarliestTimeOnCache.After(upperbound) {
+		}
 	}
 
 	return nil
