@@ -396,8 +396,28 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 	return nil
 }
 
-func (cr *Paginate[T]) RemoveItem(item T, sortedSetParam []string) error {
-	return cr.sortedSetClient.DeleteFromSortedSet(sortedSetParam, item)
+func (cr *Paginate[T]) RemoveItem(item T, param []string) error {
+	err := cr.sortedSetClient.DeleteFromSortedSet(param, item)
+	if err != nil {
+		return err
+	}
+
+	isFirstPage, errFirstPage := cr.IsFirstPage(param)
+	if errFirstPage != nil {
+		return errFirstPage
+	}
+
+	if isFirstPage {
+		numItem := cr.sortedSetClient.TotalItemOnSortedSet(param) // O(log(n))
+		if numItem == 0 {
+			errRemFirstPage := cr.DelFirstPage(param)
+			if errRemFirstPage != nil {
+				return errRemFirstPage
+			}
+		}
+	}
+
+	return nil
 }
 
 func (cr *Paginate[T]) IsFirstPage(param []string) (bool, error) {
@@ -652,6 +672,21 @@ func (cr *Paginate[T]) RemovePagination(param []string) error {
 		return err
 	}
 
+	err = cr.DelFirstPage(param)
+	if err != nil {
+		return err
+	}
+
+	err = cr.DelLastPage(param)
+	if err != nil {
+		return err
+	}
+
+	err = cr.DelBlankPage(param)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -666,6 +701,21 @@ func (cr *Paginate[T]) PurgePagination(param []string) error {
 	}
 
 	err = cr.sortedSetClient.DeleteSortedSet(param)
+	if err != nil {
+		return err
+	}
+
+	err = cr.DelFirstPage(param)
+	if err != nil {
+		return err
+	}
+
+	err = cr.DelLastPage(param)
+	if err != nil {
+		return err
+	}
+
+	err = cr.DelBlankPage(param)
 	if err != nil {
 		return err
 	}
