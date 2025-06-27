@@ -142,7 +142,7 @@ func (s *SortedSQLSeeder[T]) SeedAll(
 	query string,
 	rowsScanner RowsScanner[T],
 	args []interface{},
-	param []string,
+	keyParam []string,
 ) error {
 	if s.db == nil {
 		return NoDatabaseProvided
@@ -158,6 +158,7 @@ func (s *SortedSQLSeeder[T]) SeedAll(
 	}
 	defer rows.Close()
 
+	var counterLoop int64
 	for rows.Next() {
 		item, err := rowsScanner(rows)
 		if err != nil {
@@ -165,7 +166,12 @@ func (s *SortedSQLSeeder[T]) SeedAll(
 		}
 
 		s.baseClient.Set(item)
-		s.sortedClient.IngestItem(item, param, true)
+		s.sortedClient.IngestItem(item, keyParam, true)
+		counterLoop++
+	}
+
+	if counterLoop == 0 {
+		s.sortedClient.SetBlankPage(keyParam)
 	}
 
 	return nil

@@ -739,6 +739,14 @@ func (srtd *Sorted[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 	}
 
 	if !seed {
+		isBlankPage, errGet := srtd.IsBlankPage(sortedSetParam)
+		if errGet != nil {
+			return errGet
+		}
+		if isBlankPage {
+			srtd.DelBlankPage(sortedSetParam)
+		}
+
 		if srtd.sortedSetClient.TotalItemOnSortedSet(sortedSetParam) > 0 {
 			return srtd.sortedSetClient.SetSortedSet(sortedSetParam, score, item)
 		}
@@ -755,6 +763,66 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 
 func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
+}
+
+func (cr *Sorted[T]) SetBlankPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
+
+	setLastPageKey := cr.client.Set(
+		context.TODO(),
+		lastPageKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setLastPageKey.Err() != nil {
+		return setLastPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *Sorted[T]) DelBlankPage(param []string) error {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
+
+	delLastPageKey := cr.client.Del(context.TODO(), lastPageKey)
+	if delLastPageKey.Err() != nil {
+		return delLastPageKey.Err()
+	}
+	return nil
+}
+
+func (cr *Sorted[T]) IsBlankPage(param []string) (bool, error) {
+	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+	lastPageKey := sortedSetKey + ":blankpage"
+
+	getLastPageKey := cr.client.Get(context.TODO(), lastPageKey)
+	if getLastPageKey.Err() != nil {
+		if getLastPageKey.Err() == redis.Nil {
+			return false, nil
+		} else {
+			return false, getLastPageKey.Err()
+		}
+	}
+
+	if getLastPageKey.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (cr *Sorted[T]) RequriesSeeding(param []string, totalItems int64) (bool, error) {
+	isBlankPage, err := cr.IsBlankPage(param)
+	if err != nil {
+		return false, err
+	}
+
+	if !isBlankPage {
+		return true, nil
+	} else {
+		return false, nil
+	}
 }
 
 func (srtd *Sorted[T]) RemoveSorted(param []string) error {

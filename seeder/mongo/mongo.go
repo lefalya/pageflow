@@ -204,13 +204,14 @@ type SortedMongoSeeder[T pageflow.MongoItemBlueprint] struct {
 	scoringField string
 }
 
-func (s *SortedMongoSeeder[T]) Seed(query bson.D, listParam []string, initItem func() T) error {
+func (s *SortedMongoSeeder[T]) SeedAll(query bson.D, listParam []string, initItem func() T) error {
 	cursor, err := s.coll.Find(context.TODO(), query)
 	if err != nil {
 		return err
 	}
 	defer cursor.Close(context.TODO())
 
+	var counterLoop int64
 	for cursor.Next(context.TODO()) {
 		item := initItem()
 		errorDecode := cursor.Decode(&item)
@@ -220,6 +221,11 @@ func (s *SortedMongoSeeder[T]) Seed(query bson.D, listParam []string, initItem f
 
 		s.baseClient.Set(item)
 		s.sortedClient.IngestItem(item, listParam, true)
+		counterLoop++
+	}
+
+	if counterLoop == 0 {
+		s.sortedClient.SetBlankPage(listParam)
 	}
 
 	return nil
