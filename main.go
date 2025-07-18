@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lefalya/item"
+	"github.com/lefalya/pageflow/helper"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"math/rand"
@@ -333,7 +334,7 @@ func (cr *Paginate[T]) IngestItem(item T, sortedSetParam []string, seed bool) er
 		return errors.New("must set direction!")
 	}
 
-	score, err := getItemScore(item, cr.sortingReference)
+	score, err := helper.GetItemScoreAsFloat64(item, cr.sortingReference)
 	if err != nil {
 		return err
 	}
@@ -740,7 +741,7 @@ func (srtd *Sorted[T]) SetMostRecentItem(params []string, date time.Time) error 
 	setRecentTime := srtd.client.Set(
 		context.TODO(),
 		mostRecentTimeKey,
-		date,
+		date.Format(time.RFC3339),
 		SORTED_SET_TTL,
 	)
 
@@ -757,7 +758,7 @@ func (srtd *Sorted[T]) SetMostEarliestItem(params []string, date time.Time) erro
 	setEarliestTime := srtd.client.Set(
 		context.TODO(),
 		mostEarliestKey,
-		date,
+		date.Format(time.RFC3339),
 		SORTED_SET_TTL,
 	)
 
@@ -766,16 +767,15 @@ func (srtd *Sorted[T]) SetMostEarliestItem(params []string, date time.Time) erro
 	}
 	return nil
 }
-
 func (srtd *Sorted[T]) GetMostRecentItem(params []string) (*time.Time, error) {
 	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
 	mostRecentTimeKey := sortedSetKey + ":mostrecenttime"
 
-	result := srtd.client.Get(
-		context.TODO(),
-		mostRecentTimeKey,
-	)
+	result := srtd.client.Get(context.TODO(), mostRecentTimeKey)
 	if result.Err() != nil {
+		if result.Err() == redis.Nil {
+			return nil, nil // ✅ Consistent with GetMostEarliestItem
+		}
 		return nil, result.Err()
 	}
 
@@ -825,7 +825,7 @@ func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) {
 }
 
 func (srtd *Sorted[T]) IngestItem(item T, sortedSetParam []string, seed bool) error {
-	score, err := getItemScore(item, srtd.sortingReference)
+	score, err := helper.GetItemScoreAsFloat64(item, srtd.sortingReference)
 	if err != nil {
 		return err
 	}
@@ -849,7 +849,7 @@ func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
 }
 
-func (srtd *Sorted[T]) FetchTimeRange(
+func (srtd *Sorted[T]) FetchByTimeRange(
 	param []string,
 	upperbound time.Time,
 	lowerbound time.Time,
@@ -900,7 +900,11 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 	var rlWithin bool
 	var ruAboveU bool
 	var rlBelowL bool
+
+	// ✅ Properly initialize nested slices
 	seedingRange := make([][]time.Time, 2)
+	seedingRange[0] = make([]time.Time, 2)
+	seedingRange[1] = make([]time.Time, 2)
 
 	mostRecentTimeOnCache, err := srtd.GetMostRecentItem(params)
 	if err != nil {
@@ -912,11 +916,14 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 		return false, nil, err
 	}
 
+	// ✅ Both functions now return nil consistently for missing keys
 	if mostRecentTimeOnCache == nil && mostEarliestTimeOnCache == nil {
 		seedingRange[0][0] = lowerbound
 		seedingRange[0][1] = upperbound
-		return true, seedingRange, nil
+		return true, seedingRange[:1], nil // Return only the first range
 	}
+
+	// Rest of logic remains the same...
 	if mostEarliestTimeOnCache.UnixMilli() <= upperbound.UnixMilli() && upperbound.UnixMilli() <= mostRecentTimeOnCache.UnixMilli() {
 		ruWithin = true
 	}
@@ -933,11 +940,11 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 	if ruWithin && !rlWithin && rlBelowL {
 		seedingRange[0][0] = lowerbound
 		seedingRange[0][1] = *mostEarliestTimeOnCache
-		return true, seedingRange, nil
+		return true, seedingRange[:1], nil
 	} else if rlWithin && !ruWithin && ruAboveU {
 		seedingRange[0][0] = *mostRecentTimeOnCache
 		seedingRange[0][1] = upperbound
-		return true, seedingRange, nil
+		return true, seedingRange[:1], nil
 	} else if ruAboveU && rlBelowL {
 		seedingRange[0][0] = lowerbound
 		seedingRange[0][1] = *mostEarliestTimeOnCache
@@ -1044,40 +1051,4 @@ func FetchAll[T item.Blueprint](redisClient redis.UniversalClient, baseClient *B
 	}
 
 	return items, nil
-}
-
-func getItemScore[T item.Blueprint](item T, sortingReference string) (float64, error) {
-	if sortingReference == "" || sortingReference == "createdAt" {
-		if scorer, ok := interface{}(item).(interface{ GetCreatedAt() time.Time }); ok {
-			return float64(scorer.GetCreatedAt().UnixMilli()), nil
-		}
-	}
-
-	val := reflect.ValueOf(item)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-
-	if val.Kind() != reflect.Struct {
-		return 0, errors.New("getItemScore: item must be a struct or pointer to struct")
-	}
-
-	field := val.FieldByName(sortingReference)
-	if !field.IsValid() {
-		return 0, fmt.Errorf("getItemScore: field %s not found in item", sortingReference)
-	}
-
-	switch field.Type() {
-	case reflect.TypeOf(time.Time{}):
-		return float64(field.Interface().(time.Time).UnixMilli()), nil
-	case reflect.TypeOf(&time.Time{}):
-		if field.IsNil() {
-			return 0, errors.New("getItemScore: time field is nil")
-		}
-		return float64(field.Interface().(*time.Time).UnixMilli()), nil
-	case reflect.TypeOf(int64(0)):
-		return float64(field.Interface().(int64)), nil
-	default:
-		return 0, fmt.Errorf("getItemScore: field %s is not a time.Time", sortingReference)
-	}
 }

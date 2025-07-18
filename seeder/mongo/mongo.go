@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/lefalya/pageflow"
+	"github.com/lefalya/pageflow/helper"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -232,7 +233,7 @@ func (s *SortedMongoSeeder[T]) SeedAll(query bson.D, keyParams []string, initIte
 	return nil
 }
 
-func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string, upperbound time.Time, lowerbound time.Time, initItem func() T) error {
+func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string, seedingRanges [][]time.Time, initItem func() T) error {
 	var sortField string
 
 	if s.scoringField != "" {
@@ -248,47 +249,137 @@ func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string,
 		findOptions.SetSort(bson.D{{sortField, -1}})
 	}
 
-	filter := bson.D{
-		{"$and",
-			bson.A{
-				query,
-				bson.D{
-					{sortField, bson.D{{"$lte", upperbound}}},
-				},
-				bson.D{
-					{sortField, bson.D{{"gte", lowerbound}}},
-				},
-			},
-		},
-	}
+	// Get initial cache boundaries once, outside the loop
+	var isMostEarliestExists bool
+	var isMostRecentExists bool
+	var mostEarliestTimeOnCache *time.Time
+	var mostRecentTimeOnCache *time.Time
 
-	cursor, err := s.coll.Find(context.TODO(), filter, findOptions)
+	earliest, err := s.sortedClient.GetMostEarliestItem(keyParams)
 	if err != nil {
-		return err
+		if err == redis.Nil {
+			isMostEarliestExists = false
+		} else {
+			return err
+		}
+	} else {
+		isMostEarliestExists = true
+		mostEarliestTimeOnCache = earliest
 	}
-	defer cursor.Close(context.TODO())
 
-	for cursor.Next(context.TODO()) {
-		item := initItem()
-		errorDecode := cursor.Decode(&item)
-		if errorDecode != nil {
+	recent, err := s.sortedClient.GetMostRecentItem(keyParams)
+	if err != nil {
+		if err == redis.Nil {
+			isMostRecentExists = false
+		} else {
+			return err
+		}
+	} else {
+		isMostRecentExists = true
+		mostRecentTimeOnCache = recent
+	}
+
+	// Track whether we need to update Redis
+	var needsEarliestUpdate bool
+	var needsRecentUpdate bool
+
+	for _, timeRange := range seedingRanges {
+		if len(timeRange) != 2 {
 			continue
 		}
 
-		s.baseClient.Set(item)
-		s.sortedClient.IngestItem(item, keyParams, true)
-	}
+		rangeLower := timeRange[0]
+		rangeUpper := timeRange[1]
 
-	mostEarliestTimeOnCache, err := s.sortedClient.GetMostEarliestItem(keyParams)
-	if err != nil {
-		if err == redis.Nil {
+		filter := bson.D{
+			{"$and",
+				bson.A{
+					query,
+					bson.D{
+						{sortField, bson.D{{"$lte", rangeUpper}}},
+					},
+					bson.D{
+						{sortField, bson.D{{"$gte", rangeLower}}},
+					},
+				},
+			},
+		}
 
+		cursor, err := s.coll.Find(context.TODO(), filter, findOptions)
+		if err != nil {
+			return err
+		}
+
+		var tempEarliestTime *time.Time
+		var tempLatestTime *time.Time
+		counterLoop := 0
+
+		for cursor.Next(context.TODO()) {
+			item := initItem()
+			errorDecode := cursor.Decode(&item)
+			if errorDecode != nil {
+				continue
+			}
+
+			// Use sortField consistently (FIXED)
+			itemTime, errGIScore := helper.GetItemScoreAsTime(item, sortField)
+			if errGIScore != nil {
+				cursor.Close(context.TODO())
+				return errGIScore
+			}
+
+			if tempEarliestTime == nil || itemTime.Before(*tempEarliestTime) {
+				tempEarliestTime = &itemTime
+			}
+
+			if tempLatestTime == nil || itemTime.After(*tempLatestTime) {
+				tempLatestTime = &itemTime
+			}
+
+			s.baseClient.Set(item)
+			s.sortedClient.IngestItem(item, keyParams, true)
+
+			counterLoop++
+		}
+
+		cursor.Close(context.TODO())
+
+		if counterLoop > 0 && tempEarliestTime != nil && tempLatestTime != nil {
+			if !isMostEarliestExists && !isMostRecentExists {
+				// Cache is empty, set initial boundaries
+				mostEarliestTimeOnCache = tempEarliestTime
+				mostRecentTimeOnCache = tempLatestTime
+				isMostEarliestExists = true
+				isMostRecentExists = true
+				needsEarliestUpdate = true
+				needsRecentUpdate = true
+			} else {
+				// Update boundaries if they extend beyond current cache
+				if !isMostEarliestExists || (mostEarliestTimeOnCache != nil && tempEarliestTime.Before(*mostEarliestTimeOnCache)) {
+					mostEarliestTimeOnCache = tempEarliestTime
+					isMostEarliestExists = true
+					needsEarliestUpdate = true
+				}
+
+				if !isMostRecentExists || (mostRecentTimeOnCache != nil && tempLatestTime.After(*mostRecentTimeOnCache)) {
+					mostRecentTimeOnCache = tempLatestTime
+					isMostRecentExists = true
+					needsRecentUpdate = true
+				}
+			}
 		}
 	}
 
-	if s.sortedClient.GetDirection() == pageflow.Ascending {
+	// Update Redis only if boundaries changed
+	if needsEarliestUpdate && mostEarliestTimeOnCache != nil {
+		if err := s.sortedClient.SetMostEarliestItem(keyParams, *mostEarliestTimeOnCache); err != nil {
+			return err
+		}
+	}
 
-		if mostEarliestTimeOnCache.After(upperbound) {
+	if needsRecentUpdate && mostRecentTimeOnCache != nil {
+		if err := s.sortedClient.SetMostRecentItem(keyParams, *mostRecentTimeOnCache); err != nil {
+			return err
 		}
 	}
 
