@@ -5,7 +5,6 @@ import (
 	"errors"
 	"github.com/lefalya/pageflow"
 	"github.com/lefalya/pageflow/helper"
-	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -236,10 +235,15 @@ func (s *SortedMongoSeeder[T]) SeedAll(query bson.D, keyParams []string, initIte
 func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string, seedingRanges [][]time.Time, initItem func() T) error {
 	var sortField string
 
+	// safety net
+	if query == nil {
+		query = bson.D{}
+	}
+
 	if s.scoringField != "" {
 		sortField = s.scoringField
 	} else {
-		sortField = "_id"
+		sortField = "createdat"
 	}
 
 	findOptions := options.Find()
@@ -257,31 +261,33 @@ func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string,
 
 	earliest, err := s.sortedClient.GetMostEarliestItem(keyParams)
 	if err != nil {
-		if err == redis.Nil {
-			isMostEarliestExists = false
-		} else {
-			return err
-		}
+		return nil
 	} else {
-		isMostEarliestExists = true
-		mostEarliestTimeOnCache = earliest
+		if earliest != nil {
+			isMostEarliestExists = true
+			mostEarliestTimeOnCache = earliest
+		} else {
+			isMostEarliestExists = false
+		}
 	}
 
 	recent, err := s.sortedClient.GetMostRecentItem(keyParams)
 	if err != nil {
-		if err == redis.Nil {
-			isMostRecentExists = false
-		} else {
-			return err
-		}
+		return err
 	} else {
-		isMostRecentExists = true
-		mostRecentTimeOnCache = recent
+		if recent != nil {
+			isMostRecentExists = true
+			mostRecentTimeOnCache = recent
+		} else {
+			isMostRecentExists = false
+		}
 	}
 
 	// Track whether we need to update Redis
 	var needsEarliestUpdate bool
 	var needsRecentUpdate bool
+	var highestPointFound bool
+	var lowestPointFound bool
 
 	for _, timeRange := range seedingRanges {
 		if len(timeRange) != 2 {
@@ -349,22 +355,45 @@ func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string,
 				// Cache is empty, set initial boundaries
 				mostEarliestTimeOnCache = tempEarliestTime
 				mostRecentTimeOnCache = tempLatestTime
-				isMostEarliestExists = true
-				isMostRecentExists = true
 				needsEarliestUpdate = true
 				needsRecentUpdate = true
 			} else {
 				// Update boundaries if they extend beyond current cache
-				if !isMostEarliestExists || (mostEarliestTimeOnCache != nil && tempEarliestTime.Before(*mostEarliestTimeOnCache)) {
+				if mostEarliestTimeOnCache != nil && tempEarliestTime.Before(*mostEarliestTimeOnCache) {
 					mostEarliestTimeOnCache = tempEarliestTime
-					isMostEarliestExists = true
 					needsEarliestUpdate = true
 				}
-
-				if !isMostRecentExists || (mostRecentTimeOnCache != nil && tempLatestTime.After(*mostRecentTimeOnCache)) {
+				if mostRecentTimeOnCache != nil && tempLatestTime.After(*mostRecentTimeOnCache) {
 					mostRecentTimeOnCache = tempLatestTime
-					isMostRecentExists = true
 					needsRecentUpdate = true
+				}
+			}
+		}
+
+		// todo: memastikan apakah data terlampau atau data terkahir berada dibawah requested bound
+		// apabila iya maka sistem akan SetDBOldestBoundary or SetDatabaseNewestBoundary
+		isReachedNewestData, errGetUpperBoundary := s.sortedClient.IsReachedNewestData(keyParams)
+		if errGetUpperBoundary != nil {
+			return errGetUpperBoundary
+		}
+
+		isReachedOldestData, errGetLowerBoundary := s.sortedClient.IsReachedOldestData(keyParams)
+		if errGetLowerBoundary != nil {
+			return errGetLowerBoundary
+		}
+
+		if !isReachedNewestData || !isReachedOldestData {
+			if counterLoop == 0 {
+				if rangeLower.After(*mostRecentTimeOnCache) && isMostRecentExists {
+					highestPointFound = true
+				} else if rangeUpper.Before(*mostEarliestTimeOnCache) && isMostEarliestExists {
+					lowestPointFound = true
+				}
+			} else {
+				if rangeLower.Before(*tempEarliestTime) {
+					lowestPointFound = true
+				} else if rangeUpper.After(*tempLatestTime) {
+					highestPointFound = true
 				}
 			}
 		}
@@ -376,9 +405,18 @@ func (s *SortedMongoSeeder[T]) SeedByTimeRange(query bson.D, keyParams []string,
 			return err
 		}
 	}
-
 	if needsRecentUpdate && mostRecentTimeOnCache != nil {
 		if err := s.sortedClient.SetMostRecentItem(keyParams, *mostRecentTimeOnCache); err != nil {
+			return err
+		}
+	}
+	if lowestPointFound {
+		if err := s.sortedClient.SetReachedOldestData(keyParams); err != nil {
+			return err
+		}
+	}
+	if highestPointFound {
+		if err := s.sortedClient.SetReachedNewestData(keyParams); err != nil {
 			return err
 		}
 	}

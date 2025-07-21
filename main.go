@@ -325,6 +325,10 @@ func (cr *Paginate[T]) GetDirection() string {
 	return cr.direction
 }
 
+func (cr *Paginate[T]) UpdateItem(item T) error {
+	return cr.baseClient.Set(item)
+}
+
 func (cr *Paginate[T]) AddItem(item T, sortedSetParam []string) error {
 	return cr.IngestItem(item, sortedSetParam, false)
 }
@@ -774,7 +778,7 @@ func (srtd *Sorted[T]) GetMostRecentItem(params []string) (*time.Time, error) {
 	result := srtd.client.Get(context.TODO(), mostRecentTimeKey)
 	if result.Err() != nil {
 		if result.Err() == redis.Nil {
-			return nil, nil // ✅ Consistent with GetMostEarliestItem
+			return nil, nil
 		}
 		return nil, result.Err()
 	}
@@ -820,8 +824,142 @@ func (srtd *Sorted[T]) GetMostEarliestItem(params []string) (*time.Time, error) 
 	return &parsedTime, nil
 }
 
-func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) {
-	srtd.IngestItem(item, sortedSetParam, false)
+func (srtd *Sorted[T]) SetReachedOldestData(params []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedOldestKey := sortedSetKey + ":reachedoldest"
+
+	setReachedOldest := srtd.client.Set(
+		context.TODO(),
+		reachedOldestKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setReachedOldest.Err() != nil {
+		return setReachedOldest.Err()
+	}
+	return nil
+}
+
+func (srtd *Sorted[T]) IsReachedOldestData(params []string) (bool, error) {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedOldestKey := sortedSetKey + ":reachedoldest"
+
+	result := srtd.client.Get(context.TODO(), reachedOldestKey)
+	if result.Err() != nil {
+		if result.Err() == redis.Nil {
+			return false, nil
+		}
+		return false, result.Err()
+	}
+
+	if result.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (srtd *Sorted[T]) SetReachedNewestData(params []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedNewestKey := sortedSetKey + ":reachednewest"
+
+	setReachedNewest := srtd.client.Set(
+		context.TODO(),
+		reachedNewestKey,
+		1,
+		SORTED_SET_TTL,
+	)
+
+	if setReachedNewest.Err() != nil {
+		return setReachedNewest.Err()
+	}
+	return nil
+}
+
+func (srtd *Sorted[T]) IsReachedNewestData(params []string) (bool, error) {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedNewestKey := sortedSetKey + ":reachednewest"
+
+	result := srtd.client.Get(context.TODO(), reachedNewestKey)
+	if result.Err() != nil {
+		if result.Err() == redis.Nil {
+			return false, nil
+		}
+		return false, result.Err()
+	}
+
+	if result.Val() == "1" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (srtd *Sorted[T]) ClearOldestFlag(params []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedOldestKey := sortedSetKey + ":reachedoldest"
+
+	delOldest := srtd.client.Del(context.TODO(), reachedOldestKey)
+	if delOldest.Err() != nil {
+		return delOldest.Err()
+	}
+
+	return nil
+}
+
+func (srtd *Sorted[T]) ClearNewestFlag(params []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, params)
+	reachedNewestKey := sortedSetKey + ":reachednewest"
+
+	delNewest := srtd.client.Del(context.TODO(), reachedNewestKey)
+	if delNewest.Err() != nil {
+		return delNewest.Err()
+	}
+
+	return nil
+}
+
+func (srtd *Sorted[T]) ClearBoundaryFlags(params []string) error {
+	if err := srtd.ClearOldestFlag(params); err != nil {
+		return err
+	}
+
+	if err := srtd.ClearNewestFlag(params); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (srtd *Sorted[T]) UpdateItem(item T) error {
+	return srtd.baseClient.Set(item)
+}
+
+func (srtd *Sorted[T]) AddItem(item T, sortedSetParam []string) error {
+	mostEarliestTimeOnCache, err := srtd.GetMostEarliestItem(sortedSetParam)
+	if err != nil {
+		return err
+	}
+
+	mostRecentTimeOnCache, err := srtd.GetMostRecentItem(sortedSetParam)
+	if err != nil {
+		return err
+	}
+
+	newItemTime := item.GetCreatedAt()
+
+	if mostEarliestTimeOnCache != nil && newItemTime.Before(*mostEarliestTimeOnCache) {
+		if err := srtd.ClearOldestFlag(sortedSetParam); err != nil {
+			return err
+		}
+	}
+
+	if mostRecentTimeOnCache != nil && newItemTime.After(*mostRecentTimeOnCache) {
+		if err := srtd.ClearNewestFlag(sortedSetParam); err != nil {
+			return err
+		}
+	}
+
+	return srtd.IngestItem(item, sortedSetParam, false)
 }
 
 func (srtd *Sorted[T]) IngestItem(item T, sortedSetParam []string, seed bool) error {
@@ -901,7 +1039,6 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 	var ruAboveU bool
 	var rlBelowL bool
 
-	// ✅ Properly initialize nested slices
 	seedingRange := make([][]time.Time, 2)
 	seedingRange[0] = make([]time.Time, 2)
 	seedingRange[1] = make([]time.Time, 2)
@@ -916,14 +1053,12 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 		return false, nil, err
 	}
 
-	// ✅ Both functions now return nil consistently for missing keys
 	if mostRecentTimeOnCache == nil && mostEarliestTimeOnCache == nil {
 		seedingRange[0][0] = lowerbound
 		seedingRange[0][1] = upperbound
 		return true, seedingRange[:1], nil // Return only the first range
 	}
 
-	// Rest of logic remains the same...
 	if mostEarliestTimeOnCache.UnixMilli() <= upperbound.UnixMilli() && upperbound.UnixMilli() <= mostRecentTimeOnCache.UnixMilli() {
 		ruWithin = true
 	}
@@ -938,19 +1073,90 @@ func (srtd *Sorted[T]) RequireSeedingTimeRange(params []string, upperbound time.
 	}
 
 	if ruWithin && !rlWithin && rlBelowL {
+		// todo: check OldestDatainDB,
+		// if oldestDataInDB nil -> continue to seed
+		// else if rl is below oldestDataInDB -> no seeding required
+		isReachedOldest, errGetFlag := srtd.IsReachedOldestData(params)
+		if errGetFlag != nil {
+			return false, nil, errGetFlag
+		}
+
+		if isReachedOldest {
+			if lowerbound.Before(*mostEarliestTimeOnCache) {
+				return false, nil, nil
+			}
+		}
+
 		seedingRange[0][0] = lowerbound
 		seedingRange[0][1] = *mostEarliestTimeOnCache
 		return true, seedingRange[:1], nil
 	} else if rlWithin && !ruWithin && ruAboveU {
+		// todo: check NewestDatainDB
+		// if NewestDataInDB nil -> continue to seed
+		// if ru is higher than NewestDataInDB -> no seeding required
+		isReachedNewest, errGetFlag := srtd.IsReachedNewestData(params)
+		if errGetFlag != nil {
+			return false, nil, errGetFlag
+		}
+
+		if isReachedNewest {
+			if upperbound.After(*mostRecentTimeOnCache) {
+				return false, nil, nil
+			}
+		}
+
 		seedingRange[0][0] = *mostRecentTimeOnCache
 		seedingRange[0][1] = upperbound
 		return true, seedingRange[:1], nil
 	} else if ruAboveU && rlBelowL {
-		seedingRange[0][0] = lowerbound
-		seedingRange[0][1] = *mostEarliestTimeOnCache
-		seedingRange[1][0] = *mostRecentTimeOnCache
-		seedingRange[1][1] = upperbound
+		// todo: check OldestDatainDB,
+		// if oldestDataInDB nil -> continue to seed to rl
+		// else if rl is below oldestDataInDB -> no seeding required for rl
+		var lowerPartSettled bool
+		var upperPartSettled bool
+
+		isReachedOldest, errGetFlag := srtd.IsReachedOldestData(params)
+		if errGetFlag != nil {
+			return false, nil, errGetFlag
+		}
+		if isReachedOldest {
+			if lowerbound.Before(*mostEarliestTimeOnCache) {
+				lowerPartSettled = true
+				return false, nil, nil
+			}
+		}
+
+		// todo: check NewestDatainDB
+		// if NewestDataInDB nil -> continue to seed to ru
+		// if ru is higher than NewestDataInDB -> no seeding required for ru
+		isReachedNewest, errGetFlag := srtd.IsReachedNewestData(params)
+		if errGetFlag != nil {
+			return false, nil, errGetFlag
+		}
+		if isReachedNewest {
+			if upperbound.After(*mostRecentTimeOnCache) {
+				upperPartSettled = true
+				return false, nil, nil
+			}
+		}
+
+		if lowerPartSettled && !upperPartSettled {
+			seedingRange[0][0] = *mostEarliestTimeOnCache
+			seedingRange[0][1] = upperbound
+			return true, seedingRange[:1], nil
+		} else if !lowerPartSettled && upperPartSettled {
+			seedingRange[0][0] = lowerbound
+			seedingRange[0][1] = *mostRecentTimeOnCache
+		} else {
+			seedingRange[0][0] = lowerbound
+			seedingRange[0][1] = *mostRecentTimeOnCache
+			seedingRange[1][0] = *mostEarliestTimeOnCache
+			seedingRange[1][1] = upperbound
+		}
+
 		return true, seedingRange, nil
+	} else { // ruWithin & rlWithin
+		return false, nil, nil
 	}
 
 	return false, nil, nil
