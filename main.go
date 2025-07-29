@@ -125,9 +125,9 @@ type Base[T item.Blueprint] struct {
 	itemKeyFormat string
 }
 
-func (cr *Base[T]) Get(randId string) (T, error) {
+func (cr *Base[T]) Get(param string) (T, error) {
 	var nilItem T
-	key := fmt.Sprintf(cr.itemKeyFormat, randId)
+	key := fmt.Sprintf(cr.itemKeyFormat, param)
 
 	result := cr.client.Get(context.TODO(), key)
 	if result.Err() != nil {
@@ -151,8 +151,17 @@ func (cr *Base[T]) Get(randId string) (T, error) {
 	return item, nil
 }
 
-func (cr *Base[T]) Set(item T) error {
-	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
+func (cr *Base[T]) Set(item T, param ...string) error {
+	if len(param) > 0 {
+		return errors.New("only accept one param")
+	}
+
+	var key string
+	if param != nil {
+		key = fmt.Sprintf(cr.itemKeyFormat, param[0])
+	} else {
+		key = fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
+	}
 
 	itemInByte, errorMarshalJson := json.Marshal(item)
 	if errorMarshalJson != nil {

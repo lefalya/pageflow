@@ -205,6 +205,10 @@ type SortedMongoSeeder[T pageflow.MongoItemBlueprint] struct {
 }
 
 func (s *SortedMongoSeeder[T]) Seed(query bson.D, listParam []string, initItem func() T) error {
+	if query == nil {
+		query = bson.D{}
+	}
+
 	cursor, err := s.coll.Find(context.TODO(), query)
 	if err != nil {
 		return err
