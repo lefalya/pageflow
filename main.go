@@ -125,9 +125,9 @@ type Base[T item.Blueprint] struct {
 	itemKeyFormat string
 }
 
-func (cr *Base[T]) Get(randId string) (T, error) {
+func (cr *Base[T]) Get(param string) (T, error) {
 	var nilItem T
-	key := fmt.Sprintf(cr.itemKeyFormat, randId)
+	key := fmt.Sprintf(cr.itemKeyFormat, param)
 
 	result := cr.client.Get(context.TODO(), key)
 	if result.Err() != nil {
@@ -151,8 +151,17 @@ func (cr *Base[T]) Get(randId string) (T, error) {
 	return item, nil
 }
 
-func (cr *Base[T]) Set(item T) error {
-	key := fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
+func (cr *Base[T]) Set(item T, param ...string) error {
+	if len(param) > 0 {
+		return errors.New("only accept one param")
+	}
+
+	var key string
+	if param != nil {
+		key = fmt.Sprintf(cr.itemKeyFormat, param[0])
+	} else {
+		key = fmt.Sprintf(cr.itemKeyFormat, item.GetRandId())
+	}
 
 	itemInByte, errorMarshalJson := json.Marshal(item)
 	if errorMarshalJson != nil {
@@ -406,13 +415,26 @@ func (cr *Paginate[T]) RemoveItem(item T, param []string) error {
 	if errFirstPage != nil {
 		return errFirstPage
 	}
-
 	if isFirstPage {
 		numItem := cr.sortedSetClient.TotalItemOnSortedSet(param) // O(log(n))
 		if numItem == 0 {
 			errRemFirstPage := cr.DelFirstPage(param)
 			if errRemFirstPage != nil {
 				return errRemFirstPage
+			}
+		}
+	}
+
+	isLastPage, errLastPage := cr.IsLastPage(param)
+	if errLastPage != nil {
+		return errLastPage
+	}
+	if isLastPage {
+		numItem := cr.sortedSetClient.TotalItemOnSortedSet(param)
+		if numItem == 0 {
+			errRemLastPage := cr.DelLastPage(param)
+			if errRemLastPage != nil {
+				return errRemLastPage
 			}
 		}
 	}
@@ -762,6 +784,84 @@ func NewPaginate[T item.Blueprint](client redis.UniversalClient, baseClient *Bas
 	}
 }
 
+type Segment struct {
+	*item.Foundation `json:",inline" bson:",inline"`
+	Start            float64
+	End              float64
+}
+
+func (segment *Segment) SetStart(start float64) {
+	segment.Start = start
+}
+
+func (segment *Segment) SetEnd(end float64) {
+	segment.End = end
+}
+
+func NewSegment(start float64, end float64) Segment {
+	segment := &Segment{}
+	item.InitItem(segment)
+	return *segment
+}
+
+type SegmentManager[T item.Blueprint] struct {
+	client             redis.UniversalClient
+	baseClient         *Base[Segment]
+	sortedSetClient    *SortedSet[Segment]
+	segmentDesignation string
+}
+
+func (sm *SegmentManager[T]) AddSegment(start float64, end float64) {
+	segment := NewSegment(start, end)
+	segment.SetStart(start)
+	segment.SetEnd(end)
+
+	totalItemOnSortedSet := sm.sortedSetClient.TotalItemOnSortedSet([]string{sm.segmentDesignation})
+
+	sm.baseClient.Set(segment)
+	sm.sortedSetClient.SetSortedSet([]string{sm.segmentDesignation}, float64(totalItemOnSortedSet+1), segment)
+}
+
+func (sm *SegmentManager[T]) IsWithinSegment(start float64, end float64) *Segment {
+	keySegmentList := joinParam(sm.sortedSetClient.sortedSetKeyFormat, []string{sm.segmentDesignation})
+
+	segments, errFetchSegments := sm.client.ZRange(context.TODO(), keySegmentList, 0, -1).Result()
+	if errFetchSegments != nil {
+		return nil
+	}
+
+	for _, segmentRandId := range segments {
+		segment, err := sm.baseClient.Get(segmentRandId)
+		if err != nil {
+			continue
+		}
+
+		if segment.Start <= start && segment.End >= end {
+			return &segment
+		}
+	}
+	return nil
+}
+
+func NewSegmentManager[T item.Blueprint](client redis.UniversalClient, designation string) *SegmentManager[T] {
+	baseClient := &Base[Segment]{
+		client:        client,
+		itemKeyFormat: "segment:%s",
+	}
+
+	sortedSetClient := &SortedSet[Segment]{
+		client:             client,
+		sortedSetKeyFormat: "segments:%s",
+	}
+
+	return &SegmentManager[T]{
+		segmentDesignation: designation,
+		client:             client,
+		baseClient:         baseClient,
+		sortedSetClient:    sortedSetClient,
+	}
+}
+
 type Sorted[T item.Blueprint] struct {
 	client           redis.UniversalClient
 	baseClient       *Base[T]
@@ -811,15 +911,15 @@ func (srtd *Sorted[T]) RemoveItem(item T, sortedSetParam []string) error {
 	return srtd.sortedSetClient.DeleteFromSortedSet(sortedSetParam, item)
 }
 
-func (srtd *Sorted[T]) FetchAll(param []string) ([]T, error) {
+func (srtd *Sorted[T]) Fetch(param []string) ([]T, error) {
 	return FetchAll[T](srtd.client, srtd.baseClient, srtd.sortedSetClient, param, srtd.direction)
 }
 
-func (cr *Sorted[T]) SetBlankPage(param []string) error {
-	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+func (srtd *Sorted[T]) SetBlankPage(param []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":blankpage"
 
-	setLastPageKey := cr.client.Set(
+	setLastPageKey := srtd.client.Set(
 		context.TODO(),
 		lastPageKey,
 		1,
@@ -832,22 +932,22 @@ func (cr *Sorted[T]) SetBlankPage(param []string) error {
 	return nil
 }
 
-func (cr *Sorted[T]) DelBlankPage(param []string) error {
-	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+func (srtd *Sorted[T]) DelBlankPage(param []string) error {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":blankpage"
 
-	delLastPageKey := cr.client.Del(context.TODO(), lastPageKey)
+	delLastPageKey := srtd.client.Del(context.TODO(), lastPageKey)
 	if delLastPageKey.Err() != nil {
 		return delLastPageKey.Err()
 	}
 	return nil
 }
 
-func (cr *Sorted[T]) IsBlankPage(param []string) (bool, error) {
-	sortedSetKey := joinParam(cr.sortedSetClient.sortedSetKeyFormat, param)
+func (srtd *Sorted[T]) IsBlankPage(param []string) (bool, error) {
+	sortedSetKey := joinParam(srtd.sortedSetClient.sortedSetKeyFormat, param)
 	lastPageKey := sortedSetKey + ":blankpage"
 
-	getLastPageKey := cr.client.Get(context.TODO(), lastPageKey)
+	getLastPageKey := srtd.client.Get(context.TODO(), lastPageKey)
 	if getLastPageKey.Err() != nil {
 		if getLastPageKey.Err() == redis.Nil {
 			return false, nil
@@ -862,13 +962,16 @@ func (cr *Sorted[T]) IsBlankPage(param []string) (bool, error) {
 	return false, nil
 }
 
-func (cr *Sorted[T]) RequriesSeeding(param []string, totalItems int64) (bool, error) {
-	isBlankPage, err := cr.IsBlankPage(param)
+func (srtd *Sorted[T]) RequireSeeding(param []string) (bool, error) {
+	isBlankPage, err := srtd.IsBlankPage(param)
 	if err != nil {
 		return false, err
 	}
 
 	if !isBlankPage {
+		if srtd.sortedSetClient.TotalItemOnSortedSet(param) > 0 {
+			return false, nil
+		}
 		return true, nil
 	} else {
 		return false, nil
@@ -885,7 +988,7 @@ func (srtd *Sorted[T]) RemoveSorted(param []string) error {
 }
 
 func (srtd *Sorted[T]) PurgeSorted(param []string) error {
-	items, err := srtd.FetchAll(param)
+	items, err := srtd.Fetch(param)
 	if err != nil {
 		return err
 	}
